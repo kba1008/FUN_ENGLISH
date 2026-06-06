@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND (MIDDLEWARE GAS)
 // ==========================================
 // ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP GOOGLE APPS SCRIPT ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxsSqLbaKMr7_LCwrJbjhTLOipIpyUuZdCvds3O3EhW0-HNA0hDZ7udpPy5LfMagicL/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwftp9YKIXjjMgIw3Dx3ClYaSF9AFItWXocL7pR41UCBPlS2hZxpO1QQE9UawGHdc1c/exec';
 
 // State Permainan
 let gameState = {
