@@ -26,6 +26,98 @@ function initAudio() {
 }
 
 // ==========================================
+// TEXT-TO-SPEECH (BACA SOALAN)
+// ==========================================
+const LANG_CODE_MAP = {
+  'bahasa inggeris': 'en-US',
+  'english': 'en-US',
+  'bahasa arab': 'ar-SA',
+  'arabic': 'ar-SA',
+  'bahasa mandarin': 'zh-CN',
+  'mandarin': 'zh-CN',
+  'cina': 'zh-CN',
+  'bahasa jepun': 'ja-JP',
+  'japanese': 'ja-JP',
+  'bahasa korea': 'ko-KR',
+  'korean': 'ko-KR',
+  'bahasa perancis': 'fr-FR',
+  'french': 'fr-FR',
+  'bahasa sepanyol': 'es-ES',
+  'spanish': 'es-ES',
+  'bahasa jerman': 'de-DE',
+  'german': 'de-DE',
+  'bahasa itali': 'it-IT',
+  'italian': 'it-IT',
+  'bahasa tamil': 'ta-IN',
+  'tamil': 'ta-IN',
+  'bahasa hindi': 'hi-IN',
+  'hindi': 'hi-IN',
+  'bahasa thai': 'th-TH',
+  'thai': 'th-TH',
+  'bahasa indonesia': 'id-ID',
+  'bahasa melayu': 'ms-MY',
+  'malay': 'ms-MY'
+};
+
+function getTargetLangCode() {
+  const raw = (gameState.targetLanguage || '').toString().trim().toLowerCase();
+  if (LANG_CODE_MAP[raw]) return LANG_CODE_MAP[raw];
+  // cuba padan separa
+  for (const key in LANG_CODE_MAP) {
+    if (raw.includes(key)) return LANG_CODE_MAP[key];
+  }
+  return 'en-US';
+}
+
+function pickVoice(langPrefix) {
+  const voices = window.speechSynthesis.getVoices();
+  const p = langPrefix.toLowerCase();
+  return voices.find(v => v.lang && v.lang.toLowerCase() === p)
+      || voices.find(v => v.lang && v.lang.toLowerCase().startsWith(p.split('-')[0]))
+      || voices.find(v => v.default)
+      || voices[0];
+}
+
+function speakText(text, langPrefix) {
+  if (!('speechSynthesis' in window)) {
+    Swal.fire('Maaf', 'Pelayar anda tidak menyokong audio bacaan.', 'warning');
+    return;
+  }
+  if (!text) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  const voice = pickVoice(langPrefix || 'ms');
+  if (voice) {
+    utter.voice = voice;
+    utter.lang = voice.lang;
+  } else {
+    utter.lang = langPrefix === 'en' ? 'en-US' : 'ms-MY';
+  }
+  utter.rate = 0.95;
+  utter.pitch = 1;
+  window.speechSynthesis.speak(utter);
+}
+
+// Pastikan senarai suara siap (sesetengah pelayar lazy-load)
+if ('speechSynthesis' in window) {
+  window.speechSynthesis.onvoiceschanged = () => {};
+}
+
+function playCurrentQuestion() {
+  const text = (gameState.currentMalay || document.getElementById('malay-sentence').textContent || '').trim();
+  speakText(text, 'ms');
+}
+
+function playTargetSentence() {
+  const text = (gameState.targetSentence || '').trim();
+  if (!text) {
+    Swal.fire('Belum sedia', 'Soalan belum dimuatkan.', 'info');
+    return;
+  }
+  speakText(text, getTargetLangCode());
+}
+
+// ==========================================
 // SISTEM PENGURUSAN RALAT CANGGIH
 // ==========================================
 /**
@@ -187,6 +279,12 @@ function initEventListeners() {
 
   document.getElementById('btn-check').addEventListener('click', checkAnswer);
   document.getElementById('btn-clear').addEventListener('click', clearBoard);
+
+  const btnPlay = document.getElementById('btn-play-question');
+  if (btnPlay) btnPlay.addEventListener('click', playCurrentQuestion);
+
+  const btnPlayTarget = document.getElementById('btn-play-target');
+  if (btnPlayTarget) btnPlayTarget.addEventListener('click', playTargetSentence);
   
   document.getElementById('btn-generate-more').addEventListener('click', () => {
     fetchQuestionBatch(gameState.currentLevel, true);
