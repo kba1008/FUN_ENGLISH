@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND (MIDDLEWARE GAS)
 // ==========================================
 // ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP GOOGLE APPS SCRIPT ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzdG-g5iyOyX-SOjvR6fjiHd0MPiG_DY87_BBnltWI6V9NkJgplskamoc4UgGuBCChs/exec';
+const GAS_WEB_APP_URL = 'YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE';
 
 // State Permainan
 let gameState = {
@@ -17,6 +17,65 @@ let gameState = {
 
 // Antrian untuk offline sync (Logik Penghantaran Data)
 let syncQueue = JSON.parse(localStorage.getItem('kacakata_sync_queue')) || [];
+
+// Audio Context (untuk menghasilkan bunyi dinamik)
+let audioCtx;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+// ==========================================
+// LOGIK BUNYI (WEB AUDIO API)
+// ==========================================
+function playSuccessSound() {
+  initAudio();
+  const osc = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+  
+  osc.type = 'sine';
+  osc.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  
+  // Arpeggio yang menyeronokkan (C Major Chord)
+  const now = audioCtx.currentTime;
+  osc.frequency.setValueAtTime(523.25, now);       // C5
+  osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+  osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+  osc.frequency.setValueAtTime(1046.50, now + 0.3); // C6
+  
+  gainNode.gain.setValueAtTime(0.1, now);
+  gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 1);
+  
+  osc.start(now);
+  osc.stop(now + 1);
+}
+
+function playErrorSound() {
+  initAudio();
+  const osc = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+  
+  osc.type = 'sawtooth';
+  osc.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  
+  // Bunyi pelik / salah (jatuh frekuensi)
+  const now = audioCtx.currentTime;
+  osc.frequency.setValueAtTime(150, now);
+  osc.frequency.exponentialRampToValueAtTime(40, now + 0.5);
+  
+  gainNode.gain.setValueAtTime(0.1, now);
+  gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.5);
+  
+  osc.start(now);
+  osc.stop(now + 0.5);
+}
 
 // ==========================================
 // REGISTRASI SERVICE WORKER (PWA)
@@ -71,6 +130,9 @@ function initEventListeners() {
 
   document.getElementById('btn-check').addEventListener('click', checkAnswer);
   document.getElementById('btn-clear').addEventListener('click', clearBoard);
+  
+  // Init audio interaction pad mana-mana klik di body kali pertama
+  document.body.addEventListener('click', initAudio, { once: true });
 }
 
 function toggleScreen(screenId) {
@@ -292,6 +354,9 @@ function checkAnswer() {
   const correctAnswer = gameState.targetEnglish.toLowerCase();
 
   if (userAnswer === correctAnswer) {
+    // BILA BETUL - Bunyi Menyeronokkan
+    playSuccessSound();
+    
     let points = parseInt(gameState.currentLevel) * 10;
     gameState.score += points;
     localStorage.setItem('kacakata_score', gameState.score);
@@ -309,6 +374,9 @@ function checkAnswer() {
       fetchQuestionFromAI(gameState.currentLevel);
     });
   } else {
+    // BILA SALAH - Bunyi Pelik
+    playErrorSound();
+    
     // Jika Salah, panggil klu AI
     Swal.fire({
       title: 'Menyemak...',
