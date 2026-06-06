@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kacakata-v5-batch';
+const CACHE_NAME = 'kacakata-v8-multilang';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -6,14 +6,15 @@ const ASSETS_TO_CACHE = [
   './manifest.json',
   'https://cdn.tailwindcss.com',
   'https://unpkg.com/lucide@latest',
-  'https://cdn.jsdelivr.net/npm/sweetalert2@11'
+  'https://cdn.jsdelivr.net/npm/sweetalert2@11',
+  'https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[Service Worker] Menyimpan cache aset kritikal (v5)');
+        console.log('[Service Worker] Menyimpan cache aset kritikal (v8)');
         return cache.addAll(ASSETS_TO_CACHE);
       })
   );
