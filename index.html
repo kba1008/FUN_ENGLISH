@@ -132,7 +132,7 @@
         <button class="level-btn glass-panel p-6 rounded-2xl flex flex-col items-center gap-3 hover:bg-white/20 transition" data-level="3">
           <i data-lucide="battery-full" class="w-10 h-10 text-red-300"></i>
           <span class="font-bold text-xl">Tahap 3</span>
-          <span class="text-xs text-white/70 text-center">Sukar<br>(Sekolah Menengah)</span>
+          <span class="text-xs text-white/70 text-center">Sukar<br>(Sek. Menengah)</span>
         </button>
       </div>
     </section>
@@ -142,13 +142,17 @@
       <!-- Loading State -->
       <div id="loading-indicator" class="hidden flex-col items-center justify-center py-10">
         <i data-lucide="loader-2" class="w-12 h-12 animate-spin text-white mb-4"></i>
-        <p class="text-lg animate-pulse" id="loading-text">Cikgu AI sedang membina soalan...</p>
+        <p class="text-lg animate-pulse" id="loading-text">Menyemak Pangkalan Data AI...</p>
+        <p class="text-xs text-white/60 mt-2">Sila tunggu sebentar jika sedang menjana kumpulan soalan baru.</p>
       </div>
 
       <!-- Game Content -->
       <div id="game-content" class="flex flex-col gap-6 hidden">
-        <div class="text-center">
-          <span class="inline-block bg-white/20 px-3 py-1 rounded-full text-sm font-semibold mb-3" id="current-level-badge">Tahap X</span>
+        <div class="text-center flex flex-col items-center">
+          <div class="flex gap-2 mb-3">
+            <span class="bg-white/20 px-3 py-1 rounded-full text-sm font-semibold" id="current-level-badge">Tahap X</span>
+            <span class="bg-purple-800/50 px-3 py-1 rounded-full text-sm font-semibold" id="questions-left-badge">Baki: 0</span>
+          </div>
           <h3 class="text-2xl md:text-3xl font-bold leading-tight drop-shadow-md text-yellow-300" id="malay-sentence">
             <!-- Malay sentence appears here -->
           </h3>
@@ -173,6 +177,21 @@
         <!-- Word Pool (Available Words) -->
         <div class="bg-white/10 rounded-2xl p-4 min-h-[120px] flex flex-wrap gap-3 items-center justify-center" id="word-pool">
           <!-- Shuffled words will appear here as tiles -->
+        </div>
+      </div>
+
+      <!-- End Batch UI (When out of questions) -->
+      <div id="end-batch-ui" class="hidden flex flex-col items-center text-center gap-5 py-8">
+        <i data-lucide="award" class="w-20 h-20 text-yellow-400 animate-bounce"></i>
+        <h2 class="text-3xl font-bold">Tahniah!</h2>
+        <p class="text-white/80">Anda telah berjaya menyelesaikan semua soalan dalam kumpulan ini untuk tahap ini.</p>
+        <div class="flex gap-4 mt-4 w-full md:w-auto">
+           <button id="btn-generate-more" class="flex-1 bg-white text-purple-600 font-bold py-3 px-6 rounded-xl shadow-lg hover:bg-gray-100 transition active:scale-95">
+             <i data-lucide="plus-circle" class="inline w-5 h-5 mr-1 mb-1"></i> Soalan Tambahan
+           </button>
+           <button id="btn-back-levels" class="flex-1 bg-purple-800 text-white font-bold py-3 px-6 rounded-xl shadow-lg hover:bg-purple-900 transition active:scale-95">
+             Tukar Tahap
+           </button>
         </div>
       </div>
     </section>
