@@ -1,0 +1,22 @@
+{
+  "name": "Kaca Kata - Game Bahasa",
+  "short_name": "KacaKata",
+  "description": "Permainan interaktif menyusun ayat Bahasa Inggeris dari Bahasa Melayu menggunakan AI. Rekod murid disimpan automatik.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#9333ea",
+  "theme_color": "#8b5cf6",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://api.iconify.design/lucide/sparkles.svg?color=%23ffffff&width=192&height=192",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "https://api.iconify.design/lucide/sparkles.svg?color=%23ffffff&width=512&height=512",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
