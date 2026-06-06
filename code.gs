@@ -213,6 +213,62 @@ function callGroqApi(apiKey, prompt) {
   return data.choices[0].message.content.trim();
 }
 
+// ===== AUTO-NORMALIZER: tukar mana-mana variasi key kepada format standard =====
+function pickKey(obj, candidates) {
+  if (!obj || typeof obj !== 'object') return undefined;
+  const keys = Object.keys(obj);
+  for (const cand of candidates) {
+    const found = keys.find(k => k.toLowerCase().trim() === cand.toLowerCase());
+    if (found !== undefined && obj[found] !== undefined && obj[found] !== null) return obj[found];
+  }
+  return undefined;
+}
+
+function normalizeWord(w, fallbackIndex) {
+  if (typeof w === 'string') return { word: w, pron: w };
+  if (!w || typeof w !== 'object') return null;
+  const word = pickKey(w, ['word', 'text', 'token', 'perkataan', 'kata']);
+  const pron = pickKey(w, ['pron', 'pronunciation', 'sebutan', 'phonetic', 'phonetics', 'ipa', 'romaji']);
+  if (!word) return null;
+  return { word: String(word), pron: String(pron || word) };
+}
+
+function normalizeQuestion(q) {
+  if (!q || typeof q !== 'object') return null;
+  const malay = pickKey(q, ['malay', 'melayu', 'bm', 'bahasa_melayu', 'malay_sentence', 'source', 'sumber']);
+  const target = pickKey(q, ['target_sentence', 'target', 'translation', 'english', 'sentence', 'ayat', 'ayat_sasaran', 'terjemahan']);
+  let wordsRaw = pickKey(q, ['words', 'word_list', 'tokens', 'perkataan', 'kata']);
+
+  if (!malay || !target) return null;
+
+  // Jika words tiada, bina automatik dari target sentence
+  if (!Array.isArray(wordsRaw)) {
+    wordsRaw = String(target).split(/\s+/).filter(Boolean).map(w => ({ word: w, pron: w }));
+  }
+
+  const words = wordsRaw.map((w, i) => normalizeWord(w, i)).filter(Boolean);
+  if (words.length === 0) return null;
+
+  return { malay: String(malay), target_sentence: String(target), words: words };
+}
+
+function extractJsonArray(content) {
+  if (!content) return null;
+  let txt = String(content).trim();
+  // Buang markdown fences
+  txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  // Cuba parse terus
+  try { const p = JSON.parse(txt); if (Array.isArray(p)) return p; if (p && Array.isArray(p.data)) return p.data; if (p && Array.isArray(p.questions)) return p.questions; } catch(e) {}
+  // Cari array pertama dalam teks
+  const first = txt.indexOf('[');
+  const last = txt.lastIndexOf(']');
+  if (first !== -1 && last > first) {
+    const slice = txt.substring(first, last + 1);
+    try { const p = JSON.parse(slice); if (Array.isArray(p)) return p; } catch(e) {}
+  }
+  return null;
+}
+
 function handleGetBatchQuestions(payload) {
   const level = payload.level;
   const language = payload.language || "Bahasa Inggeris";
@@ -228,18 +284,33 @@ function handleGetBatchQuestions(payload) {
   let data = sheet.getDataRange().getValues();
   let existingQuestions = [];
   let rowsToDelete = [];
+  let corruptRows = [];
   
   // Semak cache berdasarkan Tahap DAN Bahasa Sasaran
   for(let i=1; i<data.length; i++) {
-    if(data[i][0] == level && data[i][1].toString().toLowerCase() === language.toLowerCase()) {
+    if(data[i][0] == level && data[i][1] && data[i][1].toString().toLowerCase() === language.toLowerCase()) {
        try {
-         existingQuestions.push({
+         const q = normalizeQuestion({
            malay: data[i][2],
            target_sentence: data[i][3],
            words: JSON.parse(data[i][4])
          });
-         rowsToDelete.push(i + 1);
-       } catch(e){}
+         if (q) {
+           existingQuestions.push(q);
+           rowsToDelete.push(i + 1);
+         } else {
+           corruptRows.push(i + 1);
+         }
+       } catch(e){
+         corruptRows.push(i + 1);
+       }
+    }
+  }
+
+  // AUTO-PADAM baris cache yang korup supaya tak ganggu masa depan
+  if (corruptRows.length > 0) {
+    for (let i = corruptRows.length - 1; i >= 0; i--) {
+      try { sheet.deleteRow(corruptRows[i]); } catch(e){}
     }
   }
 
@@ -257,54 +328,54 @@ function handleGetBatchQuestions(payload) {
   if (level == 2) difficulty = 'sederhana (4-7 patah perkataan), membina ayat biasa.';
   if (level == 3) difficulty = 'agak kompleks (7-10 patah perkataan).';
 
-  // Hadkan kepada 15 soalan kerana saiz JSON besar dengan cara sebutan
-  const prompt = `Anda pakar pelbagai bahasa. Bina 15 soalan rawak dalam Bahasa Melayu yang ${difficulty}. Terjemahkan ayat tersebut dengan tepat ke dalam ${language}.
+  const buildPrompt = (strictMode) => `Anda pakar pelbagai bahasa. Bina 15 soalan rawak dalam Bahasa Melayu yang ${difficulty}. Terjemahkan ayat tersebut dengan tepat ke dalam ${language}.
 
-HANYA berikan output dalam format tatasusunan JSON (JSON array) seperti contoh ini SAHAJA tanpa sebarang teks markdown atau penerangan:
+HANYA berikan output JSON array tulen, tanpa markdown atau penerangan. Contoh:
 [
   {
     "malay": "Saya suka makan epal",
     "target_sentence": "Watashi wa ringo o taberu no ga suki desu",
     "words": [
       {"word": "Watashi", "pron": "wa-ta-shi"},
-      {"word": "wa", "pron": "wa"},
-      {"word": "ringo", "pron": "ring-go"},
-      {"word": "o", "pron": "o"},
-      {"word": "taberu", "pron": "ta-be-ru"},
-      {"word": "no", "pron": "no"},
-      {"word": "ga", "pron": "ga"},
-      {"word": "suki", "pron": "su-ki"},
-      {"word": "desu", "pron": "de-su"}
+      {"word": "ringo", "pron": "ring-go"}
     ]
   }
 ]
 
-PENTING: Anda MESTI mengekalkan kunci objek (object keys) "malay", "target_sentence", dan "words" menggunakan huruf kecil dan ejaan yang tepat untuk memastikan sistem tidak ralat (Cannot read properties of undefined). Di dalam tatasusunan "words", pastikan setiap objek mempunyai kunci "word" dan "pron". Kunci ini adalah mandatori dan tidak boleh diubah!`;
+WAJIB${strictMode ? ' (PERCUBAAN AKHIR – jangan ubah format)' : ''}: setiap objek MESTI ada 3 kekunci huruf kecil "malay", "target_sentence", "words". Setiap item dalam "words" MESTI ada "word" dan "pron". JANGAN gunakan nama lain seperti "english", "sentence", "translation", "pronunciation". JANGAN tambah teks lain.`;
 
-  let content = callGroqApi(apiKey, prompt);
-  
-  if (content.startsWith('```json')) content = content.replace(/^```json/, '');
-  if (content.startsWith('```')) content = content.replace(/^```/, '');
-  if (content.endsWith('```')) content = content.replace(/```$/, '');
-  content = content.trim();
+  // AUTO-RETRY sehingga 3x jika AI keluarkan format korup
+  let parsedData = [];
+  let lastError = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      let content = callGroqApi(apiKey, buildPrompt(attempt >= 2));
+      const arr = extractJsonArray(content);
+      if (!arr) { lastError = 'Tidak jumpa JSON array dalam respons AI.'; continue; }
+      const normalized = arr.map(normalizeQuestion).filter(Boolean);
+      if (normalized.length > 0) { parsedData = normalized; break; }
+      lastError = 'Semua item gagal normalisasi (kekunci hilang).';
+    } catch (err) {
+      lastError = err.message || String(err);
+    }
+  }
 
-  let parsedData;
-  try {
-    parsedData = JSON.parse(content);
-    if (!Array.isArray(parsedData)) throw new Error("Format yang dikembalikan bukan bentuk tatasusunan (Array).");
-    
-    // PENGURUSAN RALAT CANGGIH: Validate setiap rekod supaya tak jadi ralat undefined kat frontend
-    parsedData = parsedData.filter(q => q && q.malay && q.target_sentence && Array.isArray(q.words));
-    
-    if (parsedData.length === 0) throw new Error("Struktur JSON dikembalikan secara sintaksis sah, tetapi kekunci wajib (keys) seperti 'malay', 'target_sentence' atau 'words' telah diabaikan atau salah ejaan oleh AI.");
-
-  } catch (err) {
-    throw new Error("Format ralat dari AI. Punca: " + err.message);
+  // Jika AI masih gagal tetapi kita ada cache lama, guna cache
+  if (parsedData.length === 0) {
+    if (existingQuestions.length > 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        source: "cache_fallback",
+        data: existingQuestions,
+        notice: "AI gagal menjana format baharu, guna cache sedia ada. Punca: " + lastError
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    throw new Error("AI gagal menjana soalan dalam format yang betul selepas 3 percubaan. Punca: " + lastError);
   }
 
   if (rowsToDelete.length > 0) {
     for (let i = rowsToDelete.length - 1; i >= 0; i--) {
-      sheet.deleteRow(rowsToDelete[i]);
+      try { sheet.deleteRow(rowsToDelete[i]); } catch(e){}
     }
   }
 

@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND
 // ==========================================
 // ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxkGGN1Lc_NSKcsqvcBCjvD08YQYLO5Z46CzN74PKJKifVc-UZ90iAhGWaw-R1OUDuU/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxMHzcqX1Ie8Ri5dsT3DBpX1X6Whb6mQa40uX4z42d4zLHwvqASBhMuVIgoU-pQbGQk/exec';
 
 // State Permainan
 let gameState = {
@@ -335,20 +335,52 @@ async function fetchQuestionBatch(level, forceRegenerate) {
     if (!result.data || !Array.isArray(result.data)) {
         throw new Error("Maklumat diterima bukan tatasusunan (Array) senarai soalan yang sah.");
     }
-    
-    const validQuestions = result.data.filter(q => q && q.malay && q.target_sentence && Array.isArray(q.words));
-    
-    if (validQuestions.length === 0) {
+
+    // AUTO-NORMALIZE: terima pelbagai variasi key dari AI
+    const pick = (o, keys) => {
+      if (!o) return undefined;
+      for (const k of keys) {
+        const found = Object.keys(o).find(x => x.toLowerCase().trim() === k.toLowerCase());
+        if (found && o[found] != null) return o[found];
+      }
+      return undefined;
+    };
+    const normalized = result.data.map(q => {
+      if (!q || typeof q !== 'object') return null;
+      const malay = pick(q, ['malay','melayu','bm','bahasa_melayu','source']);
+      const target = pick(q, ['target_sentence','target','translation','english','sentence','ayat']);
+      let words = pick(q, ['words','word_list','tokens','perkataan']);
+      if (!malay || !target) return null;
+      if (!Array.isArray(words)) {
+        words = String(target).split(/\s+/).filter(Boolean).map(w => ({ word: w, pron: w }));
+      }
+      words = words.map(w => {
+        if (typeof w === 'string') return { word: w, pron: w };
+        if (!w || typeof w !== 'object') return null;
+        const word = pick(w, ['word','text','token','perkataan']);
+        const pron = pick(w, ['pron','pronunciation','sebutan','phonetic','ipa','romaji']);
+        return word ? { word: String(word), pron: String(pron || word) } : null;
+      }).filter(Boolean);
+      if (words.length === 0) return null;
+      return { malay: String(malay), target_sentence: String(target), words };
+    }).filter(Boolean);
+
+    if (normalized.length === 0) {
+        // AUTO-RECOVERY: cuba sekali lagi dengan forceRegenerate jika belum
+        if (!forceRegenerate) {
+          console.warn('Data korup diterima, auto-regenerate...');
+          return fetchQuestionBatch(level, true);
+        }
         throw new Error("Format data soalan korup. Kekunci (keys) seperti 'malay', 'target_sentence' atau 'words' tidak wujud.");
     }
 
-    gameState.questionPool = shuffleArray(validQuestions);
+    gameState.questionPool = shuffleArray(normalized);
     loadNextQuestionFromPool();
 
   } catch (error) {
     let solution = "Sila periksa sambungan internet anda dan cuba sekali lagi.";
     if (error.message.includes("Format") || error.message.includes("korup") || error.message.includes("sah")) {
-      solution = "Format AI didapati tidak stabil untuk kali ini. Penyelesaiannya: Buka Google Sheets > Menu Admin Game > Padam Cache Soalan. Kemudian tekan butang Tahap untuk AI jana format baharu.";
+      solution = "Sistem telah cuba auto-pulih tetapi gagal. Sila tekan butang Tahap sekali lagi — jika masih gagal, buka Google Sheets > Admin Game > Padam Cache Soalan.";
     } else if (error.message.includes("API") || error.message.includes("Groq")) {
       solution = "Sila pastikan API Key Groq yang dimasukkan ke dalam sheet 'API_KEY' adalah sah, tepat, dan belum tamat tempoh penggunaannya.";
     }
