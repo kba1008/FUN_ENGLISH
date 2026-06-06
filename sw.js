@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kacakata-v8-multilang';
+const CACHE_NAME = 'kacakata-v9-multilang';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -14,7 +14,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[Service Worker] Menyimpan cache aset kritikal (v8)');
+        console.log('[Service Worker] Menyimpan cache aset kritikal (v9)');
         return cache.addAll(ASSETS_TO_CACHE);
       })
   );
