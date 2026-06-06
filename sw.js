@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kacakata-v4';
+const CACHE_NAME = 'kacakata-v5-batch';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -13,7 +13,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[Service Worker] Menyimpan cache aset kritikal');
+        console.log('[Service Worker] Menyimpan cache aset kritikal (v5)');
         return cache.addAll(ASSETS_TO_CACHE);
       })
   );
@@ -37,7 +37,7 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Bypass cache untuk permintaan API ke Google Apps Script (Middleware Groq/Sheet)
+  // Bypass cache untuk permintaan API ke Google Apps Script (Backend AI & Sheets)
   if (event.request.url.includes('script.google.com') || event.request.url.includes('script.googleusercontent.com')) {
     return;
   }
