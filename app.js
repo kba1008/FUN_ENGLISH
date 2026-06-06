@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND
 // ==========================================
 // ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxsSqLbaKMr7_LCwrJbjhTLOipIpyUuZdCvds3O3EhW0-HNA0hDZ7udpPy5LfMagicL/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxMHzcqX1Ie8Ri5dsT3DBpX1X6Whb6mQa40uX4z42d4zLHwvqASBhMuVIgoU-pQbGQk/exec';
 
 // State Permainan
 let gameState = {
