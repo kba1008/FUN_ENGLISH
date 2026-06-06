@@ -111,7 +111,9 @@ function handleCheckName(payload) {
     if (data[i][1].toString().trim().toLowerCase() === name.toLowerCase()) {
       return ContentService.createTextOutput(JSON.stringify({ 
         status: "exists", 
-        message: "Nama telah digunakan. Sila letak nama panggilan lain."
+        message: "Nama telah digunakan sebelum ini. Sambung semula latihan?",
+        score: parseInt(data[i][3]) || 0,
+        level: data[i][2] || 1
       })).setMimeType(ContentService.MimeType.JSON);
     }
   }

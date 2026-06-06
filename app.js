@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND
 // ==========================================
 // ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzDR8vV7JZAxapQysqyZAlSPB7aUo-XhNvrDPm9DuENYl_Men-X3MDrBCxRmAuatVii/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz655s0Cy7oWbpRsSLHjtjDj-B59tKWFIZdS55njxyJp2qkZuWxQctQYzcb-lxo9Kxk/exec';
 
 // State Permainan
 let gameState = {
@@ -85,17 +85,31 @@ function speakText(text, langPrefix) {
   }
   if (!text) return;
   window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
+
   const voice = pickVoice(langPrefix || 'ms');
-  if (voice) {
-    utter.voice = voice;
-    utter.lang = voice.lang;
-  } else {
-    utter.lang = langPrefix === 'en' ? 'en-US' : 'ms-MY';
-  }
-  utter.rate = 0.95;
-  utter.pitch = 1;
-  window.speechSynthesis.speak(utter);
+  const lang = voice ? voice.lang : (langPrefix && langPrefix.includes('-') ? langPrefix : (langPrefix === 'en' ? 'en-US' : 'ms-MY'));
+
+  // Mod mesra OKU: pecah ayat kepada perkataan, sebut satu-satu dengan jeda.
+  const words = String(text).trim().split(/\s+/).filter(Boolean);
+
+  words.forEach((w, i) => {
+    const utter = new SpeechSynthesisUtterance(w);
+    if (voice) utter.voice = voice;
+    utter.lang = lang;
+    utter.rate = 0.6;   // perlahan & jelas
+    utter.pitch = 1;
+    utter.volume = 1;
+    // jeda antara perkataan dgn ayat kosong pendek selepas setiap perkataan
+    window.speechSynthesis.speak(utter);
+    if (i < words.length - 1) {
+      const pause = new SpeechSynthesisUtterance(' , ');
+      if (voice) pause.voice = voice;
+      pause.lang = lang;
+      pause.rate = 0.6;
+      pause.volume = 0;
+      window.speechSynthesis.speak(pause);
+    }
+  });
 }
 
 // Pastikan senarai suara siap (sesetengah pelayar lazy-load)
@@ -369,7 +383,26 @@ async function startGameSetup() {
     const data = await response.json();
 
     if (data.status === 'exists') {
-      Swal.fire('Oops', data.message, 'error');
+      const savedScore = parseInt(data.score) || 0;
+      const confirm = await Swal.fire({
+        title: `Selamat kembali, ${name}! 👋`,
+        html: `Nama ini telah berdaftar dengan markah <b>${savedScore}</b>.<br>Sambung semula latihan kamu?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#ec4899',
+        cancelButtonColor: '#9ca3af',
+        confirmButtonText: 'Ya, Sambung',
+        cancelButtonText: 'Guna Nama Lain'
+      });
+      if (confirm.isConfirmed) {
+        gameState.name = name;
+        gameState.score = savedScore;
+        localStorage.setItem('kacakata_name', name);
+        localStorage.setItem('kacakata_score', savedScore);
+        document.getElementById('display-name').textContent = name;
+        document.getElementById('display-score').textContent = savedScore;
+        toggleScreen('screen-language');
+      }
     } else {
       Swal.close();
       gameState.name = name;
