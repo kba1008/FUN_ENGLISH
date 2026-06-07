@@ -111,7 +111,9 @@ function handleCheckName(payload) {
     if (data[i][1].toString().trim().toLowerCase() === name.toLowerCase()) {
       return ContentService.createTextOutput(JSON.stringify({ 
         status: "exists", 
-        message: "Nama telah digunakan. Sila letak nama panggilan lain."
+        message: "Nama telah digunakan sebelum ini. Sambung semula latihan?",
+        score: parseInt(data[i][3]) || 0,
+        level: data[i][2] || 1
       })).setMimeType(ContentService.MimeType.JSON);
     }
   }
@@ -213,6 +215,32 @@ function callGroqApi(apiKey, prompt) {
   return data.choices[0].message.content.trim();
 }
 
+// Versi khas untuk jana soalan – guna JSON mode + system message ketat.
+function callGroqApiJson(apiKey, prompt) {
+  const url = 'https://api.groq.com/openai/v1/chat/completions';
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    payload: JSON.stringify({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages: [
+        { role: 'system', content: 'You are a strict JSON generator. You MUST output valid JSON only, no markdown, no commentary. Use EXACTLY the schema requested with lowercase English keys.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.5,
+      response_format: { type: 'json_object' }
+    }),
+    muteHttpExceptions: true
+  };
+  const response = UrlFetchApp.fetch(url, options);
+  const data = JSON.parse(response.getContentText());
+  if (response.getResponseCode() !== 200) {
+    throw new Error(data.error ? data.error.message : "Ralat sambungan pelayan Groq AI.");
+  }
+  return data.choices[0].message.content.trim();
+}
+
 // ===== AUTO-NORMALIZER: tukar mana-mana variasi key kepada format standard =====
 function pickKey(obj, candidates) {
   if (!obj || typeof obj !== 'object') return undefined;
@@ -235,9 +263,9 @@ function normalizeWord(w, fallbackIndex) {
 
 function normalizeQuestion(q) {
   if (!q || typeof q !== 'object') return null;
-  const malay = pickKey(q, ['malay', 'melayu', 'bm', 'bahasa_melayu', 'malay_sentence', 'source', 'sumber']);
-  const target = pickKey(q, ['target_sentence', 'target', 'translation', 'english', 'sentence', 'ayat', 'ayat_sasaran', 'terjemahan']);
-  let wordsRaw = pickKey(q, ['words', 'word_list', 'tokens', 'perkataan', 'kata']);
+  const malay = pickKey(q, ['malay', 'melayu', 'bm', 'bahasa_melayu', 'malay_sentence', 'source', 'sumber', 'soalan', 'question', 'malay_text', 'bm_sentence', 'asal']);
+  const target = pickKey(q, ['target_sentence', 'target', 'translation', 'english', 'english_sentence', 'sentence', 'ayat', 'ayat_sasaran', 'terjemahan', 'translated', 'answer', 'jawapan', 'target_text']);
+  let wordsRaw = pickKey(q, ['words', 'word_list', 'tokens', 'perkataan', 'kata', 'word_array', 'word_data', 'translation_words']);
 
   if (!malay || !target) return null;
 
@@ -252,19 +280,60 @@ function normalizeQuestion(q) {
   return { malay: String(malay), target_sentence: String(target), words: words };
 }
 
+// Cari semua array dalam JSON secara rekursif dan kumpul item yang nampak seperti soalan.
+function deepCollectQuestions(node, out) {
+  if (!node) return;
+  if (Array.isArray(node)) {
+    for (var i = 0; i < node.length; i++) {
+      var item = node[i];
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        var q = normalizeQuestion(item);
+        if (q) out.push(q);
+        else deepCollectQuestions(item, out);
+      } else {
+        deepCollectQuestions(item, out);
+      }
+    }
+  } else if (typeof node === 'object') {
+    for (var k in node) deepCollectQuestions(node[k], out);
+  }
+}
+
 function extractJsonArray(content) {
   if (!content) return null;
   let txt = String(content).trim();
   // Buang markdown fences
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
   // Cuba parse terus
-  try { const p = JSON.parse(txt); if (Array.isArray(p)) return p; if (p && Array.isArray(p.data)) return p.data; if (p && Array.isArray(p.questions)) return p.questions; } catch(e) {}
+  try {
+    const p = JSON.parse(txt);
+    if (Array.isArray(p)) return p;
+    if (p && typeof p === 'object') {
+      // Cari array utama dengan kekunci biasa
+      var candidates = ['questions', 'data', 'soalan', 'items', 'list', 'results', 'output'];
+      for (var i = 0; i < candidates.length; i++) {
+        if (Array.isArray(p[candidates[i]])) return p[candidates[i]];
+      }
+      // Jika tiada, cari mana-mana property yang merupakan array objek
+      for (var k in p) {
+        if (Array.isArray(p[k]) && p[k].length && typeof p[k][0] === 'object') return p[k];
+      }
+      // Jika objek tunggal yang sah, balut sebagai array
+      return [p];
+    }
+  } catch(e) {}
   // Cari array pertama dalam teks
   const first = txt.indexOf('[');
   const last = txt.lastIndexOf(']');
   if (first !== -1 && last > first) {
     const slice = txt.substring(first, last + 1);
     try { const p = JSON.parse(slice); if (Array.isArray(p)) return p; } catch(e) {}
+  }
+  // Last resort: cari object pertama
+  const ofirst = txt.indexOf('{');
+  const olast = txt.lastIndexOf('}');
+  if (ofirst !== -1 && olast > ofirst) {
+    try { const p = JSON.parse(txt.substring(ofirst, olast + 1)); return [p]; } catch(e) {}
   }
   return null;
 }
@@ -328,33 +397,50 @@ function handleGetBatchQuestions(payload) {
   if (level == 2) difficulty = 'sederhana (4-7 patah perkataan), membina ayat biasa.';
   if (level == 3) difficulty = 'agak kompleks (7-10 patah perkataan).';
 
-  const buildPrompt = (strictMode) => `Anda pakar pelbagai bahasa. Bina 15 soalan rawak dalam Bahasa Melayu yang ${difficulty}. Terjemahkan ayat tersebut dengan tepat ke dalam ${language}.
+  const buildPrompt = (strictMode) => `Tugas: Bina 15 soalan terjemahan untuk pelajar.
+Bahasa sumber: Bahasa Melayu (${difficulty})
+Bahasa sasaran: ${language}
 
-HANYA berikan output JSON array tulen, tanpa markdown atau penerangan. Contoh:
-[
-  {
-    "malay": "Saya suka makan epal",
-    "target_sentence": "Watashi wa ringo o taberu no ga suki desu",
-    "words": [
-      {"word": "Watashi", "pron": "wa-ta-shi"},
-      {"word": "ringo", "pron": "ring-go"}
-    ]
-  }
-]
+OUTPUT JSON SAHAJA dengan struktur INI TEPAT (tiada teks lain):
+{
+  "questions": [
+    {
+      "malay": "<ayat dalam Bahasa Melayu>",
+      "target_sentence": "<terjemahan dalam ${language}>",
+      "words": [
+        {"word": "<perkataan dalam ${language}>", "pron": "<sebutan fonetik mudah>"}
+      ]
+    }
+  ]
+}
 
-WAJIB${strictMode ? ' (PERCUBAAN AKHIR – jangan ubah format)' : ''}: setiap objek MESTI ada 3 kekunci huruf kecil "malay", "target_sentence", "words". Setiap item dalam "words" MESTI ada "word" dan "pron". JANGAN gunakan nama lain seperti "english", "sentence", "translation", "pronunciation". JANGAN tambah teks lain.`;
+Peraturan WAJIB${strictMode ? ' (PERCUBAAN AKHIR)' : ''}:
+- Gunakan TEPAT kekunci huruf kecil ini: "questions", "malay", "target_sentence", "words", "word", "pron".
+- JANGAN guna nama lain seperti "english", "sentence", "translation", "pronunciation", "bahasa_melayu".
+- "words" mesti senarai setiap perkataan dalam "target_sentence" mengikut urutan.
+- "pron" ialah sebutan fonetik mudah (contoh: "ring-go", "ai lavv yu").
+- Hasilkan 15 soalan berbeza, rawak, sesuai untuk pelajar OKU.
+- Output JSON object sahaja. Tiada markdown, tiada komen.`;
 
   // AUTO-RETRY sehingga 3x jika AI keluarkan format korup
   let parsedData = [];
   let lastError = '';
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      let content = callGroqApi(apiKey, buildPrompt(attempt >= 2));
+      let content = callGroqApiJson(apiKey, buildPrompt(attempt >= 2));
       const arr = extractJsonArray(content);
-      if (!arr) { lastError = 'Tidak jumpa JSON array dalam respons AI.'; continue; }
-      const normalized = arr.map(normalizeQuestion).filter(Boolean);
+      let normalized = arr ? arr.map(normalizeQuestion).filter(Boolean) : [];
+      // Fallback: deep-scan jika normalisasi flat gagal
+      if (normalized.length === 0) {
+        try {
+          const parsed = JSON.parse(content);
+          const out = [];
+          deepCollectQuestions(parsed, out);
+          if (out.length > 0) normalized = out;
+        } catch (e) {}
+      }
       if (normalized.length > 0) { parsedData = normalized; break; }
-      lastError = 'Semua item gagal normalisasi (kekunci hilang).';
+      lastError = 'Semua item gagal normalisasi (kekunci hilang). Sampel respons: ' + String(content).substring(0, 200);
     } catch (err) {
       lastError = err.message || String(err);
     }
