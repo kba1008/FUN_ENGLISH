@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbypRlK87xaC_wsf6VYmKnsvDGSdJ7cpRser0j03vsbBer1W-lqZ0us8DYUyr2FczLKT/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -470,16 +470,19 @@ let answerSortable = null;
 let _ttsUnlocked = false;
 
 function initAudio() {
-  // Unlock AudioContext
+  // 1. Unlock Web Audio API
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
 
-  // Unlock TTS untuk iOS — MESTI dipanggil dalam user gesture
+  // 2. Unlock TTS — iOS WAJIB dipanggil dalam user gesture
+  //    volume MESTI > 0 (iOS abaikan volume=0 untuk tujuan unlock)
+  //    JANGAN cancel() sebelum ini — biarkan ia selesai sendiri (ultra pantas)
   if ('speechSynthesis' in window && !_ttsUnlocked) {
     _ttsUnlocked = true;
-    const u = new SpeechSynthesisUtterance('');
-    u.volume = 0;
-    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance('\u00A0'); // non-breaking space
+    u.volume = 0.01;
+    u.rate   = 10;
+    u.pitch  = 1;
     window.speechSynthesis.speak(u);
   }
 }
@@ -536,70 +539,41 @@ const VOICE_FALLBACK = {
 };
 
 // ==========================================
-// VOICE LOADING — mobile-safe
+// VOICE CACHE — muatkan latar belakang
 // ==========================================
 let _cachedVoices = [];
-let _voicesReady = false;
-let _voicesReadyCallbacks = [];
-
-function _onVoicesLoaded(voices) {
-  _cachedVoices = voices || [];
-  _voicesReady = true;
-  _voicesReadyCallbacks.forEach(cb => cb(_cachedVoices));
-  _voicesReadyCallbacks = [];
-}
 
 if ('speechSynthesis' in window) {
-  // Set up onvoiceschanged SEBELUM panggil getVoices()
-  window.speechSynthesis.onvoiceschanged = () => {
+  const _loadVoices = () => {
     const v = window.speechSynthesis.getVoices() || [];
-    if (v.length > 0) _onVoicesLoaded(v);
+    if (v.length) _cachedVoices = v;
   };
-  // Cuba muatkan terus (works on desktop & some Android)
-  try {
-    const v = window.speechSynthesis.getVoices() || [];
-    if (v.length > 0) _onVoicesLoaded(v);
-  } catch(e) {}
+  window.speechSynthesis.onvoiceschanged = _loadVoices;
+  try { _loadVoices(); } catch(e) {}
 }
 
-// Pulangkan Promise<voices[]> — tunggu sehingga senarai tersedia
-function getVoicesAsync() {
-  return new Promise(resolve => {
-    if (_voicesReady && _cachedVoices.length > 0) {
-      resolve(_cachedVoices);
-      return;
-    }
-    // Daftar callback, timeout 3s sebagai fallback
-    const tid = setTimeout(() => {
-      resolve(_cachedVoices); // mungkin masih kosong tapi jangan block
-    }, 3000);
-    _voicesReadyCallbacks.push((voices) => {
-      clearTimeout(tid);
-      resolve(voices);
-    });
-    // Cuba sekali lagi — Android kadang-kadang perlukan rangsangan kedua
-    try {
-      const v = window.speechSynthesis.getVoices() || [];
-      if (v.length > 0) { clearTimeout(tid); _onVoicesLoaded(v); }
-    } catch(e) {}
-  });
-}
-
-function pickVoice(voices, langCode) {
-  if (!voices || !voices.length) return null;
+// Pilih suara terbaik mengikut langCode, guna getVoices() segar + cache
+function pickVoice(langCode) {
+  const live = (typeof window.speechSynthesis !== 'undefined')
+    ? (window.speechSynthesis.getVoices() || []) : [];
+  const voices = live.length ? live : _cachedVoices;
+  if (!voices.length) return null;
   const chain = VOICE_FALLBACK[langCode] || [langCode, langCode.split('-')[0]];
   for (const tag of chain) {
-    const tagLower = tag.toLowerCase();
-    let v = voices.find(v => v.lang && v.lang.toLowerCase() === tagLower);
+    const t = tag.toLowerCase();
+    let v = voices.find(x => x.lang && x.lang.toLowerCase() === t);
     if (v) return v;
-    v = voices.find(v => v.lang && v.lang.toLowerCase().startsWith(tagLower + '-'));
+    v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(t + '-'));
     if (v) return v;
-    v = voices.find(v => v.lang && v.lang.toLowerCase() === tagLower.split('-')[0]);
+    v = voices.find(x => x.lang && x.lang.toLowerCase() === t.split('-')[0]);
     if (v) return v;
   }
-  return voices.find(v => v.default) || voices[0];
+  return voices.find(x => x.default) || voices[0] || null;
 }
 
+// ==========================================
+// AUDIO BUTTONS LOCK/UNLOCK
+// ==========================================
 const audioButtons = new Set();
 function lockAudioButtons() {
   ['btn-play-question', 'btn-play-target'].forEach(id => {
@@ -612,33 +586,41 @@ function unlockAudioButtons() {
   audioButtons.clear();
 }
 
+// ==========================================
+// speakText — synchronous, iOS + Android safe
+// ==========================================
 function speakText(text, langCode, onAllDone) {
   if (!('speechSynthesis' in window)) {
-    Swal.fire('-', 'Browser tidak menyokong audio.', 'warning');
     if (onAllDone) onAllDone();
     return;
   }
-  if (!text) { if (onAllDone) onAllDone(); return; }
+  if (!text || !String(text).trim()) { if (onAllDone) onAllDone(); return; }
 
-  // Unlock TTS sekiranya belum (backup — sepatutnya sudah unlock masa initAudio)
-  if (!_ttsUnlocked) { initAudio(); }
+  // Backup: unlock TTS sekiranya user belum sentuh skrin
+  if (!_ttsUnlocked) initAudio();
 
-  window.speechSynthesis.cancel();
+  // Cancel HANYA jika sedang bercakap — elak ganggu unlock utterance
+  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+    window.speechSynthesis.cancel();
+  }
 
-  // Guna cached voices (sudah dimuatkan oleh onvoiceschanged)
-  const voice = pickVoice(_cachedVoices, langCode || 'en-US');
+  const voice = pickVoice(langCode || 'en-US');
   const lang  = voice ? voice.lang : (langCode || 'en-US');
 
-  // Word-by-word HANYA jika admin enable secara eksplisit
   const words = adminSettings.audioWordPause
     ? String(text).trim().split(/\s+/).filter(Boolean)
     : [String(text)];
 
-  // Bina semua utterance dahulu, baru speak satu-per-satu berantai
-  // (lebih stabil pada iOS berbanding forEach speak sekaligus)
   let idx = 0;
+  let _watchdog;
+
   function speakNext() {
-    if (idx >= words.length) { unlockAudioButtons(); if (onAllDone) onAllDone(); return; }
+    clearTimeout(_watchdog);
+    if (idx >= words.length) {
+      unlockAudioButtons();
+      if (onAllDone) onAllDone();
+      return;
+    }
     const utter = new SpeechSynthesisUtterance(words[idx++]);
     if (voice) utter.voice = voice;
     utter.lang   = lang;
@@ -646,8 +628,14 @@ function speakText(text, langCode, onAllDone) {
     utter.pitch  = adminSettings.audioPitch;
     utter.volume = 1;
     utter.onend  = speakNext;
-    utter.onerror = () => { unlockAudioButtons(); if (onAllDone) onAllDone(); };
+    utter.onerror = () => { clearTimeout(_watchdog); unlockAudioButtons(); if (onAllDone) onAllDone(); };
     window.speechSynthesis.speak(utter);
+    // Watchdog: iOS kadang-kadang hang tanpa onend — paksa selesai selepas 10s
+    _watchdog = setTimeout(() => {
+      window.speechSynthesis.cancel();
+      unlockAudioButtons();
+      if (onAllDone) onAllDone();
+    }, 10000);
   }
   speakNext();
 }
@@ -812,7 +800,9 @@ function initEventListeners() {
     if (appTitleTapCount >= 5) { appTitleTapCount = 0; openAdminLogin(); }
   });
 
-  document.body.addEventListener('click', initAudio, { once: true });
+  // touchstart fires BEFORE click on mobile — unlock TTS seawal mungkin
+  document.body.addEventListener('touchstart', initAudio, { once: true, passive: true });
+  document.body.addEventListener('click',      initAudio, { once: true });
 }
 let appTitleTapCount = 0, appTitleTapTimer;
 
