@@ -314,7 +314,7 @@ function handleGetBatchQuestions(payload) {
     }
   }
 
-  if (!forceRegenerate && existingQuestions.length >= 5) {
+  if (!forceRegenerate && existingQuestions.length >= 20) {
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
       source: "cache",
@@ -328,7 +328,7 @@ function handleGetBatchQuestions(payload) {
   if (level == 2) difficulty = 'sederhana (5-8 patah perkataan). Ayat MESTI menggunakan tatabahasa yang betul sepenuhnya: kala (tense), persetujuan kata nama-kata kerja, kata sendi, dan susunan kata yang tulen mengikut bahasa sasaran.';
   if (level == 3) difficulty = 'agak kompleks (8-12 patah perkataan) dengan tatabahasa lanjutan yang tepat: penggunaan kata hubung, kala lampau/akan datang, frasa adjektif, dan struktur ayat yang natif.';
 
-  const buildPrompt = (strictMode) => `Anda pakar pelbagai bahasa. Bina 15 soalan rawak dalam Bahasa Melayu yang ${difficulty}. Terjemahkan ayat tersebut dengan tepat ke dalam ${language}.
+  const buildPrompt = (strictMode) => `Anda pakar pelbagai bahasa. Bina 50 soalan rawak dalam Bahasa Melayu yang ${difficulty}. Terjemahkan ayat tersebut dengan tepat ke dalam ${language}.
 
 HANYA berikan output JSON array tulen, tanpa markdown atau penerangan. Contoh:
 [
