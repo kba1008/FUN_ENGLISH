@@ -6,15 +6,18 @@
   <title>Kaca Kata - Kuasai Pelbagai Bahasa</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#f472b6">
-  
+
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  
+
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  
+
   <!-- SweetAlert2 -->
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+  <!-- SortableJS untuk drag & drop susunan jawapan -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 
   <!-- Google Fonts: Fredoka (Ceria & Kid-friendly) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,7 +26,6 @@
 
   <style>
     body {
-      /* Latar belakang ceria bergerak */
       background: linear-gradient(-45deg, #FF9A9E, #FECFEF, #A1C4FD, #C2E9FB);
       background-size: 400% 400%;
       animation: gradientBG 15s ease infinite;
@@ -31,14 +33,11 @@
       font-family: 'Fredoka', sans-serif;
       overflow-x: hidden;
     }
-
     @keyframes gradientBG {
       0% { background-position: 0% 50%; }
       50% { background-position: 100% 50%; }
       100% { background-position: 0% 50%; }
     }
-
-    /* Awan / Bubble berterbangan */
     .bubble {
       position: absolute;
       background: rgba(255, 255, 255, 0.4);
@@ -50,7 +49,6 @@
       0%, 100% { transform: translateY(0) scale(1); }
       50% { transform: translateY(-20px) scale(1.1); }
     }
-
     .glass-panel {
       background: rgba(255, 255, 255, 0.85);
       backdrop-filter: blur(10px);
@@ -59,8 +57,6 @@
       box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1), 0 5px 15px rgba(0,0,0,0.05);
       position: relative;
     }
-
-    /* Butang 3D Ceria */
     .btn-3d {
       transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
       border-bottom-width: 6px;
@@ -73,13 +69,17 @@
       margin-top: 6px;
       margin-bottom: -6px;
     }
-
-    /* Tiles Perkataan */
+    .btn-3d:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      filter: grayscale(40%);
+    }
     .word-tile {
       transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
       cursor: pointer;
       user-select: none;
       border-bottom-width: 4px;
+      touch-action: manipulation;
     }
     .word-tile:hover {
       transform: translateY(-4px) scale(1.05) rotate(2deg);
@@ -88,6 +88,17 @@
       transform: translateY(2px) scale(0.95);
       border-bottom-width: 0px;
     }
+    /* Sortable visual feedback */
+    .sortable-ghost { opacity: 0.4; }
+    .sortable-chosen { transform: scale(1.08) rotate(-2deg); }
+    .sortable-drag { transform: rotate(3deg); }
+
+    /* Audio playing indicator */
+    @keyframes pulseAudio {
+      0%, 100% { box-shadow: 0 4px 6px rgba(6,182,212,0.4); }
+      50% { box-shadow: 0 4px 20px rgba(6,182,212,0.9); }
+    }
+    .audio-playing { animation: pulseAudio 0.8s ease-in-out infinite; }
 
     ::-webkit-scrollbar { width: 10px; }
     ::-webkit-scrollbar-track { background: rgba(255,255,255,0.5); border-radius: 10px; }
@@ -96,20 +107,19 @@
 </head>
 <body class="text-gray-800 flex items-center justify-center p-4">
 
-  <!-- Dekorasi Latar -->
   <div class="bubble w-32 h-32 top-10 left-10"></div>
   <div class="bubble w-20 h-20 bottom-20 right-10" style="animation-delay: 2s;"></div>
   <div class="bubble w-40 h-40 top-40 right-20" style="animation-delay: 4s; background: rgba(255,255,255,0.2);"></div>
 
   <div id="app-container" class="w-full max-w-2xl mx-auto glass-panel rounded-[2.5rem] p-6 md:p-8 flex flex-col gap-6">
-    
+
     <!-- Header / Stats Bar -->
     <header class="flex justify-between items-center border-b-4 border-pink-200 pb-4 hidden" id="header-section">
       <div class="flex items-center gap-2 bg-white px-4 py-2 rounded-full shadow-sm border-2 border-pink-100">
         <i data-lucide="smile" class="text-pink-500"></i>
         <span id="display-name" class="font-bold text-lg text-pink-600">Pelajar</span>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
         <div class="flex items-center gap-2 bg-yellow-100 border-2 border-yellow-300 px-4 py-2 rounded-full shadow-sm" title="Markah Terkumpul">
           <i data-lucide="star" class="text-yellow-500 w-5 h-5 fill-yellow-500"></i>
           <span id="display-score" class="font-bold text-yellow-700 text-lg">0</span>
@@ -129,23 +139,52 @@
         <div class="inline-block p-4 bg-white rounded-full shadow-md mb-4 animate-bounce">
           <i data-lucide="languages" class="w-16 h-16 text-pink-500"></i>
         </div>
-        <h1 class="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-cyan-500 drop-shadow-sm">
+        <h1 id="app-title" class="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-cyan-500 drop-shadow-sm cursor-pointer select-none">
           Kaca Kata
         </h1>
         <p class="text-gray-500 font-medium mt-3 text-lg">Belajar pelbagai bahasa dunia dengan mudah & menyeronokkan!</p>
       </div>
-      
+
       <div class="mt-4 flex flex-col gap-4">
         <div class="bg-white p-4 rounded-3xl border-4 border-pink-100 shadow-sm">
           <label class="block font-bold text-pink-500 mb-2 pl-2 text-lg">Nama Panggilan Kamu</label>
           <input type="text" id="input-name" placeholder="Contoh: Ali, Sarah..." class="w-full bg-gray-50 border-2 border-gray-200 rounded-2xl px-5 py-4 text-xl text-gray-700 placeholder-gray-400 focus:outline-none focus:border-pink-400 focus:ring-4 focus:ring-pink-100 transition">
         </div>
+
+        <!-- Bahasa Ibunda -->
+        <div class="bg-white p-4 rounded-3xl border-4 border-emerald-100 shadow-sm">
+          <label class="block font-bold text-emerald-600 mb-2 pl-2 text-lg flex items-center gap-2">
+            <i data-lucide="home" class="w-5 h-5"></i> Bahasa Ibunda
+          </label>
+          <select id="select-mother-tongue" class="w-full bg-gray-50 border-2 border-gray-200 rounded-2xl px-5 py-4 text-xl text-gray-700 focus:outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 transition">
+            <option value="Bahasa Melayu">🇲🇾 Bahasa Melayu</option>
+            <option value="Bahasa Inggeris">🇬🇧 Bahasa Inggeris (English)</option>
+            <option value="Bahasa Indonesia">🇮🇩 Bahasa Indonesia</option>
+            <option value="Bahasa Mandarin">🇨🇳 Bahasa Mandarin (中文)</option>
+            <option value="Bahasa Tamil">🇮🇳 Bahasa Tamil (தமிழ்)</option>
+            <option value="Bahasa Arab">🇸🇦 Bahasa Arab (العربية)</option>
+            <option value="Bahasa Hindi">🇮🇳 Bahasa Hindi (हिन्दी)</option>
+            <option value="Bahasa Jepun">🇯🇵 Bahasa Jepun (日本語)</option>
+            <option value="Bahasa Korea">🇰🇷 Bahasa Korea (한국어)</option>
+            <option value="Bahasa Thai">🇹🇭 Bahasa Thai (ภาษาไทย)</option>
+            <option value="Bahasa Sepanyol">🇪🇸 Bahasa Sepanyol (Español)</option>
+            <option value="Bahasa Perancis">🇫🇷 Bahasa Perancis (Français)</option>
+            <option value="Bahasa Jerman">🇩🇪 Bahasa Jerman (Deutsch)</option>
+            <option value="Bahasa Itali">🇮🇹 Bahasa Itali (Italiano)</option>
+            <option value="Bahasa Rusia">🇷🇺 Bahasa Rusia (Русский)</option>
+          </select>
+          <p class="text-xs text-gray-500 mt-2 pl-2">Soalan akan dipaparkan & disebut dalam bahasa ibunda anda.</p>
+        </div>
+
         <button id="btn-start-game" class="bg-pink-500 hover:bg-pink-400 border-pink-600 text-white font-bold text-2xl rounded-[2rem] py-4 px-6 btn-3d w-full mt-2">
           Seterusnya 🚀
         </button>
+
+        <button id="btn-admin" class="text-xs text-gray-400 hover:text-gray-600 underline mt-2">
+          🔒 Mod Admin
+        </button>
       </div>
 
-      <!-- Leaderboard Section -->
       <div id="leaderboard-section" class="mt-6 bg-cyan-50 border-4 border-cyan-100 rounded-[2rem] p-5 hidden">
         <h3 class="text-2xl font-bold mb-4 flex items-center justify-center gap-2 text-cyan-600">
           <i data-lucide="trophy" class="w-7 h-7 text-yellow-500 fill-yellow-500"></i> Juara Bahasa
@@ -158,11 +197,11 @@
 
     <!-- Screen 2: Language Selection -->
     <section id="screen-language" class="hidden flex flex-col gap-5 py-4">
-      <h2 class="text-3xl font-bold text-center text-pink-500 mb-2">Pilih Bahasa 🌍</h2>
-      <p class="text-center text-gray-500 mb-4">Kamu ingin belajar bahasa apa hari ini?</p>
-      
+      <h2 class="text-3xl font-bold text-center text-pink-500 mb-2">Pilih Bahasa Sasaran 🌍</h2>
+      <p class="text-center text-gray-500 mb-2">Kamu ingin belajar bahasa apa hari ini?</p>
+      <p class="text-center text-xs text-emerald-600 font-bold">Bahasa Ibunda: <span id="display-mother-tongue">Bahasa Melayu</span></p>
+
       <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-4">
-        <!-- 10 Preset Languages -->
         <button class="lang-btn bg-white border-4 border-blue-200 hover:bg-blue-50 text-blue-600 font-bold p-3 rounded-2xl btn-3d flex flex-col items-center gap-1 text-center" data-lang="Bahasa Inggeris">
           <span class="text-4xl">🇬🇧</span> <span class="text-sm">Bahasa Inggeris</span>
         </button>
@@ -194,7 +233,7 @@
           <span class="text-4xl">🇹🇭</span> <span class="text-sm">Bahasa Thai</span>
         </button>
       </div>
-      
+
       <div class="bg-white p-4 rounded-3xl border-4 border-gray-200 shadow-sm">
         <label class="block font-bold text-gray-500 mb-2 pl-2">Atau taip bahasa lain:</label>
         <div class="flex flex-col sm:flex-row gap-2">
@@ -211,8 +250,9 @@
       <div class="text-center mb-4">
         <span class="bg-pink-100 text-pink-600 px-4 py-1 rounded-full font-bold text-sm mb-2 inline-block border-2 border-pink-200" id="badge-selected-lang">Bahasa Pilihan</span>
         <h2 class="text-3xl font-bold text-gray-700">Pilih Tahap Kesukaran 🚀</h2>
+        <p class="text-xs text-gray-500 mt-2">💡 Soalan hanya dijana selepas anda pilih tahap (jimat kuota AI)</p>
       </div>
-      
+
       <div class="flex flex-col gap-4">
         <button class="level-btn bg-white border-4 border-green-400 hover:bg-green-50 p-6 rounded-[2rem] btn-3d flex items-center gap-4" data-level="1">
           <div class="bg-green-100 p-4 rounded-full text-green-500">
@@ -223,7 +263,7 @@
             <span class="text-gray-500 font-medium">Sangat Mudah (Sesuai untuk Pemula)</span>
           </div>
         </button>
-        
+
         <button class="level-btn bg-white border-4 border-yellow-400 hover:bg-yellow-50 p-6 rounded-[2rem] btn-3d flex items-center gap-4" data-level="2">
           <div class="bg-yellow-100 p-4 rounded-full text-yellow-600">
             <i data-lucide="flame" class="w-8 h-8"></i>
@@ -248,7 +288,6 @@
 
     <!-- Screen 4: Gameplay -->
     <section id="screen-game" class="hidden flex flex-col gap-6">
-      <!-- Loading State -->
       <div id="loading-indicator" class="hidden flex-col items-center justify-center py-12">
         <div class="relative w-24 h-24 mb-6">
           <div class="absolute inset-0 border-8 border-pink-100 rounded-full"></div>
@@ -259,22 +298,19 @@
         <p class="text-sm text-gray-500 mt-2 font-medium bg-white px-4 py-2 rounded-full border-2 border-gray-100">Sedang menyediakan modul soalan baru untuk kamu.</p>
       </div>
 
-      <!-- Game Content -->
       <div id="game-content" class="flex flex-col gap-6 hidden">
         <div class="text-center flex flex-col items-center bg-white p-6 rounded-[2rem] border-4 border-cyan-100 shadow-sm">
-          <div class="flex gap-2 mb-4">
+          <div class="flex flex-wrap justify-center gap-2 mb-4">
             <span class="bg-cyan-100 text-cyan-600 px-4 py-1 rounded-full text-sm font-bold border-2 border-cyan-200" id="current-level-badge">Tahap X</span>
-            <span class="bg-pink-100 text-pink-600 px-4 py-1 rounded-full text-sm font-bold border-2 border-pink-200" id="questions-left-badge">Baki: 0</span>
+            <span class="bg-pink-100 text-pink-600 px-4 py-1 rounded-full text-sm font-bold border-2 border-pink-200" id="questions-progress-badge">Soalan 0/0</span>
           </div>
-          <h3 class="text-2xl md:text-3xl font-extrabold leading-tight text-gray-800" id="malay-sentence">
-            <!-- Malay sentence appears here -->
-          </h3>
+          <h3 class="text-2xl md:text-3xl font-extrabold leading-tight text-gray-800" id="malay-sentence"></h3>
           <div class="mt-4 flex flex-wrap justify-center gap-3">
             <button id="btn-play-question" type="button"
               class="bg-cyan-500 hover:bg-cyan-400 border-cyan-600 text-white font-bold py-2 px-5 rounded-3xl btn-3d inline-flex items-center gap-2 text-base"
-              aria-label="Baca soalan dalam Bahasa Melayu">
+              aria-label="Baca soalan dalam Bahasa Ibunda">
               <i data-lucide="volume-2" class="w-5 h-5"></i>
-              <span>Baca Soalan (BM)</span>
+              <span>Baca Soalan</span>
             </button>
             <button id="btn-play-target" type="button"
               class="bg-pink-500 hover:bg-pink-400 border-pink-600 text-white font-bold py-2 px-5 rounded-3xl btn-3d inline-flex items-center gap-2 text-base"
@@ -288,13 +324,21 @@
           </p>
         </div>
 
-        <!-- Answer Dropzone (Selected Words) -->
-        <div class="bg-gray-50 border-4 border-dashed border-cyan-300 rounded-[2rem] p-6 min-h-[140px] flex flex-wrap gap-3 items-center justify-center shadow-inner relative" id="answer-area">
-          <span class="absolute text-cyan-200 font-bold text-2xl pointer-events-none select-none z-0">Letak jawapan di sini</span>
-          <!-- Selected words will move here -->
+        <!-- Navigation: Back / Skip -->
+        <div class="flex justify-between gap-3">
+          <button id="btn-prev-question" class="bg-white border-4 border-gray-300 hover:bg-gray-50 text-gray-700 font-bold py-2 px-5 rounded-3xl btn-3d flex items-center gap-2">
+            <i data-lucide="chevron-left" class="w-5 h-5"></i> Sebelum
+          </button>
+          <button id="btn-skip-question" class="bg-white border-4 border-amber-300 hover:bg-amber-50 text-amber-600 font-bold py-2 px-5 rounded-3xl btn-3d flex items-center gap-2">
+            Lompat <i data-lucide="chevron-right" class="w-5 h-5"></i>
+          </button>
         </div>
 
-        <!-- Controls -->
+        <!-- Answer Dropzone (Selected Words) - drag to reorder -->
+        <div class="bg-gray-50 border-4 border-dashed border-cyan-300 rounded-[2rem] p-6 min-h-[140px] flex flex-wrap gap-3 items-center justify-center shadow-inner relative" id="answer-area">
+          <span id="answer-placeholder" class="absolute text-cyan-300 font-bold text-lg pointer-events-none select-none z-0 text-center px-4">Tekan perkataan di bawah · Tahan & seret untuk ubah susunan</span>
+        </div>
+
         <div class="flex justify-center gap-4">
            <button id="btn-check" class="bg-green-500 hover:bg-green-400 border-green-600 text-white font-bold py-3 px-8 rounded-3xl btn-3d flex items-center gap-2 text-xl">
              <i data-lucide="check-circle" class="w-6 h-6"></i> Semak
@@ -304,13 +348,9 @@
            </button>
         </div>
 
-        <!-- Word Pool (Available Words) -->
-        <div class="bg-white border-4 border-pink-200 rounded-[2rem] p-6 min-h-[150px] flex flex-wrap gap-3 items-center justify-center shadow-sm" id="word-pool">
-          <!-- Shuffled words will appear here as tiles -->
-        </div>
+        <div class="bg-white border-4 border-pink-200 rounded-[2rem] p-6 min-h-[150px] flex flex-wrap gap-3 items-center justify-center shadow-sm" id="word-pool"></div>
       </div>
 
-      <!-- End Batch UI -->
       <div id="end-batch-ui" class="hidden flex flex-col items-center text-center gap-6 py-10 bg-white border-4 border-yellow-300 rounded-[2.5rem] shadow-sm">
         <div class="bg-yellow-100 p-6 rounded-full">
           <i data-lucide="award" class="w-24 h-24 text-yellow-500 animate-bounce"></i>
@@ -328,7 +368,6 @@
       </div>
     </section>
 
-    <!-- Sync Status -->
     <div id="sync-status" class="absolute top-4 right-6 text-xs font-bold flex items-center gap-1 bg-white/80 px-3 py-1 rounded-full shadow-sm border border-white">
       <i data-lucide="wifi" class="w-4 h-4" id="wifi-icon"></i>
       <span id="sync-text" class="text-gray-600">Online</span>
