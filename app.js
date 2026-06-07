@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbypRlK87xaC_wsf6VYmKnsvDGSdJ7cpRser0j03vsbBer1W-lqZ0us8DYUyr2FczLKT/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
