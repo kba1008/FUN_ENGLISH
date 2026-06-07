@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwa5o0S82Jk_2SNaKpp6HhnQZLRlkUEKZX29vNFMxDkZLhdPS7gHcu6vco6woyxoC5r/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzOJfzz9lKq2ZMI3ODfoQCAqolBMq61v7JbuoUUs5R-iKQYxvXtwisaM13MxYUjE2ln/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -743,6 +743,31 @@ function _speakNow(str, langCode, onAllDone) {
   const match = _matchVoiceForLang(langCode || 'en-US');
   const voice = match.voice;
   const lang  = voice ? voice.lang : (langCode || 'en-US');
+
+  // Jika bahasa Arab dan TIADA suara Arab dalam OS — beri amaran mesra & jangan cuba TTS
+  const wantArabic = (langCode || '').toLowerCase().startsWith('ar');
+  const gotArabic  = voice && voice.lang && voice.lang.toLowerCase().startsWith('ar');
+  if (wantArabic && !gotArabic) {
+    unlockAudioButtons();
+    if (onAllDone) onAllDone();
+    Swal.fire({
+      icon: 'info',
+      title: '🔊 Suara Arab belum dipasang',
+      html: `<div class="text-left text-sm leading-relaxed">
+        Komputer ini tiada suara Arab. Untuk dengar sebutan, pasang dahulu:
+        <ul class="list-disc pl-5 mt-2 space-y-1">
+          <li><b>Windows:</b> Settings → Time & Language → <b>Speech</b> → Manage voices → <b>Add a voice</b> → pilih <b>Arabic</b>.</li>
+          <li><b>Android:</b> Settings → Google → Text-to-speech → <b>Install voice data</b> → Arabic.</li>
+          <li><b>iPhone/iPad:</b> Settings → Accessibility → Spoken Content → Voices → Arabic.</li>
+        </ul>
+        <p class="mt-2 text-gray-500">Selepas pasang, mulakan semula app ini.</p>
+      </div>`,
+      confirmButtonColor: '#06b6d4',
+      confirmButtonText: 'OK, faham'
+    });
+    return;
+  }
+
   // Kuatkuasa kelajuan admin untuk SEMUA bahasa
   const rate  = (adminSettings.audioRate  > 0) ? adminSettings.audioRate  : 0.85;
   const pitch = (adminSettings.audioPitch > 0) ? adminSettings.audioPitch : 1.0;
@@ -753,7 +778,7 @@ function _speakNow(str, langCode, onAllDone) {
   // Tanda baca dibersihkan supaya tidak dibaca sebagai simbol.
   const words = str
     .split(/\s+/)
-    .map(w => w.replace(/[.,;:!?¿¡"()\[\]{}–—]/g, '').trim())
+    .map(w => w.replace(/[.,;:!?¿¡"()\[\]{}–—،؛؟]/g, '').trim())
     .filter(Boolean);
   if (words.length === 0) { if (onAllDone) onAllDone(); unlockAudioButtons(); return; }
 
@@ -1429,10 +1454,28 @@ function clearBoard() {
   }
 }
 
+function _normalizeForCompare(s) {
+  if (!s) return '';
+  return String(s)
+    .toLowerCase()
+    // Buang diakritik Arab (tashkeel) & tatweel
+    .replace(/[\u064B-\u0652\u0670\u0640]/g, '')
+    // Normalisasi alif Arab supaya أ إ آ ا dikira sama
+    .replace(/[\u0622\u0623\u0625]/g, '\u0627')
+    // Normalisasi ya & ta marbuta
+    .replace(/\u0649/g, '\u064A')
+    .replace(/\u0629/g, '\u0647')
+    // Buang SEMUA tanda baca (Latin + Arab + CJK biasa)
+    .replace(/[.,!?;:'"()\[\]{}\-–—_/\\،؛؟…。、！？「」『』]/g, '')
+    // Mampatkan ruang
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function checkAnswer() {
   if (gameState.selectedWords.length === 0) return;
-  const u = gameState.selectedWords.map(w => w.word).join(' ').toLowerCase().trim();
-  const c = gameState.targetSentence.toLowerCase().trim();
+  const u = _normalizeForCompare(gameState.selectedWords.map(w => w.word).join(' '));
+  const c = _normalizeForCompare(gameState.targetSentence);
   if (u === c) {
     playSuccessSound();
     const points = parseInt(gameState.currentLevel) * 15;
