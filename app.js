@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxuSBUyw9uV-CSB8ZK4l-EdpgtK3VoyxIOiL3oHhREVQ1EwVdaCpJKaGTPHJ94XDbGE/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -697,20 +697,59 @@ function speakText(text, langCode, onAllDone) {
   const str = String(text || '').trim();
   if (!str) { if (onAllDone) onAllDone(); return; }
 
-  // Selalu cancel dahulu — selamat kerana kita dalam user gesture (button click)
-  // PENTING: Jangan letak SEBARANG await/setTimeout sebelum speak() — akan buang gesture context
-  window.speechSynthesis.cancel();
+  // Tunggu voices dimuatkan (Chrome async): cuba sehingga 1.5s
+  const startSpeak = () => _speakNow(str, langCode, onAllDone);
+  const have = (window.speechSynthesis.getVoices() || []).length;
+  if (have === 0) {
+    let attempts = 0;
+    const poll = setInterval(() => {
+      attempts++;
+      const v = window.speechSynthesis.getVoices() || [];
+      if (v.length || attempts > 15) {
+        clearInterval(poll);
+        startSpeak();
+      }
+    }, 100);
+  } else {
+    startSpeak();
+  }
+}
 
-  const voice = pickVoice(langCode || 'en-US');
+// Cari voice yang BENAR-BENAR padan dengan langCode (bukan fallback ke voice default)
+function _matchVoiceForLang(langCode) {
+  const voices = (window.speechSynthesis.getVoices() || []);
+  if (!voices.length) return { voice: null, matched: false, reason: 'no-voices' };
+  const chain = VOICE_FALLBACK[langCode] || [langCode, langCode.split('-')[0]];
+  for (const tag of chain) {
+    const t = tag.toLowerCase();
+    let v = voices.find(x => x.lang && x.lang.toLowerCase() === t);
+    if (v) return { voice: v, matched: true };
+    v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(t + '-'));
+    if (v) return { voice: v, matched: true };
+    v = voices.find(x => x.lang && x.lang.toLowerCase() === t.split('-')[0]);
+    if (v) return { voice: v, matched: true };
+  }
+  return { voice: null, matched: false, reason: 'lang-not-installed' };
+}
+
+function _speakNow(str, langCode, onAllDone) {
+  // Cancel dahulu — selamat sebab masih dalam user gesture
+  try { window.speechSynthesis.cancel(); } catch(e) {}
+
+  const match = _matchVoiceForLang(langCode || 'en-US');
+  const voice = match.voice;
   const lang  = voice ? voice.lang : (langCode || 'en-US');
   const rate  = (adminSettings.audioRate  > 0) ? adminSettings.audioRate  : 0.95;
   const pitch = (adminSettings.audioPitch > 0) ? adminSettings.audioPitch : 1.0;
   const voiceName = voice ? (voice.name || voice.lang) : null;
 
-  // 2. Amaran jika tiada suara langsung (mungkin belum dimuatkan)
-  const allVoices = window.speechSynthesis.getVoices() || [];
-  if (allVoices.length === 0) {
-    console.warn('[TTS] Tiada suara dimuatkan lagi — cuba dengan utter.lang sahaja');
+  // PROAKTIF: jika tiada voice padan untuk bahasa ini, jangan biar senyap — papar ralat segera
+  if (!match.matched) {
+    unlockAudioButtons();
+    if (onAllDone) onAllDone();
+    const code = match.reason === 'no-voices' ? 'synthesis-unavailable' : 'language-unavailable';
+    _showTtsError(code, langCode || '?', null, false);
+    return;
   }
 
   const words = adminSettings.audioWordPause
@@ -719,10 +758,14 @@ function speakText(text, langCode, onAllDone) {
 
   let idx = 0;
   let _watchdog;
-  let _speechStarted = false;   // jejak sama ada audio sempat bermula
+  let _keepalive;
+  let _speechStarted = false;
+
+  function stopKeepalive() { if (_keepalive) { clearInterval(_keepalive); _keepalive = null; } }
 
   function speakNext() {
     clearTimeout(_watchdog);
+    stopKeepalive();
     if (idx >= words.length) {
       unlockAudioButtons();
       if (onAllDone) onAllDone();
@@ -735,34 +778,123 @@ function speakText(text, langCode, onAllDone) {
     utter.pitch  = pitch;
     utter.volume = 1;
 
-    utter.onstart = () => { _speechStarted = true; };
-    utter.onend   = speakNext;
+    utter.onstart = () => {
+      _speechStarted = true;
+      // Chrome desktop bug: TTS berhenti selepas ~15s. Pause/resume keepalive.
+      _keepalive = setInterval(() => {
+        try {
+          if (window.speechSynthesis.speaking) {
+            window.speechSynthesis.pause();
+            window.speechSynthesis.resume();
+          }
+        } catch(e) {}
+      }, 10000);
+    };
+    utter.onend = () => { stopKeepalive(); speakNext(); };
     utter.onerror = (e) => {
       clearTimeout(_watchdog);
+      stopKeepalive();
       unlockAudioButtons();
       if (onAllDone) onAllDone();
-      // Abaikan ralat "canceled" — ia dijana secara normal apabila kita cancel()
       const code = (e && e.error) ? e.error : '';
       if (code === 'canceled' || code === 'interrupted') return;
       _showTtsError(code, lang, voiceName, _speechStarted);
     };
 
-    window.speechSynthesis.speak(utter);
-
-    // Watchdog: iOS kadang-kadang senyap tanpa onend/onerror
-    // Jika tiada respons dalam 12s, tunjuk ralat "tidak bermula"
-    _watchdog = setTimeout(() => {
-      window.speechSynthesis.cancel();
+    try {
+      window.speechSynthesis.speak(utter);
+    } catch (err) {
+      stopKeepalive();
       unlockAudioButtons();
       if (onAllDone) onAllDone();
+      _showTtsError('invalid-argument', lang, voiceName, false);
+      return;
+    }
+
+    // Watchdog: jika audio tidak bermula dalam 4s, ada masalah enjin
+    _watchdog = setTimeout(() => {
       if (!_speechStarted) {
-        // TTS tidak pernah bermula — tunjuk ralat diagnostik
+        try { window.speechSynthesis.cancel(); } catch(e) {}
+        stopKeepalive();
+        unlockAudioButtons();
+        if (onAllDone) onAllDone();
         _showTtsError('synthesis-failed', lang, voiceName, false);
       }
-    }, 12000);
+    }, 4000);
   }
   speakNext();
 }
+
+// ==========================================
+// DIAGNOSTIK AUDIO — papar status TTS & senarai bahasa tersedia
+// ==========================================
+function diagnoseAudio() {
+  const ua = navigator.userAgent;
+  const supported = ('speechSynthesis' in window);
+  const voices = supported ? (window.speechSynthesis.getVoices() || []) : [];
+  const targetCode = getTargetLangCode();
+  const motherCode = getMotherLangCode();
+  const tMatch = _matchVoiceForLang(targetCode);
+  const mMatch = _matchVoiceForLang(motherCode);
+
+  const langGroups = {};
+  voices.forEach(v => {
+    const key = (v.lang || '??').toLowerCase();
+    if (!langGroups[key]) langGroups[key] = [];
+    langGroups[key].push(v.name || '(tanpa nama)');
+  });
+  const langList = Object.keys(langGroups).sort().map(k => {
+    return `<div class="text-xs"><b class="text-pink-600">${k}</b>: ${langGroups[k].slice(0,3).join(', ')}${langGroups[k].length>3 ? ' …+'+(langGroups[k].length-3) : ''}</div>`;
+  }).join('') || '<i class="text-gray-400">Tiada suara dimuatkan</i>';
+
+  const tick = (b) => b ? '✅' : '❌';
+  const browserShort = /iPhone|iPad|iPod/.test(ua) ? 'iOS Safari'
+    : /Samsung/.test(ua) ? 'Samsung Internet'
+    : /Edg/.test(ua) ? 'Edge'
+    : /Chrome/.test(ua) ? 'Chrome'
+    : /Firefox/.test(ua) ? 'Firefox'
+    : 'Tidak dikenal';
+
+  Swal.fire({
+    title: '🩺 Diagnos Audio',
+    width: 560,
+    html: `
+      <div class="text-left text-sm space-y-3">
+        <div class="bg-gray-50 border-2 border-gray-200 rounded-2xl p-3 space-y-1">
+          <div>${tick(supported)} Sokongan TTS browser</div>
+          <div>${tick(voices.length>0)} Suara dimuatkan: <b>${voices.length}</b></div>
+          <div>${tick(tMatch.matched)} Bahasa sasaran <b>${targetCode}</b> ${tMatch.matched ? '→ '+(tMatch.voice.name||tMatch.voice.lang) : '(tiada suara)'}</div>
+          <div>${tick(mMatch.matched)} Bahasa ibunda <b>${motherCode}</b> ${mMatch.matched ? '→ '+(mMatch.voice.name||mMatch.voice.lang) : '(tiada suara)'}</div>
+          <div>📱 Browser: <b>${browserShort}</b></div>
+        </div>
+        ${(!tMatch.matched || !mMatch.matched) ? `
+        <div class="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3">
+          <p class="font-bold text-amber-700 mb-1">💡 Cara baiki bahasa hilang:</p>
+          <p class="text-gray-700 text-xs"><b>Android:</b> Tetapan → Sistem → Bahasa & Input → Output Text-to-Speech → Google TTS → Pasang data suara untuk bahasa yang hilang.</p>
+          <p class="text-gray-700 text-xs mt-1"><b>iOS:</b> Tetapan → Kebolehcapaian → Kandungan Lisan → Suara → pilih bahasa & muat turun.</p>
+          <p class="text-gray-700 text-xs mt-1"><b>Windows:</b> Settings → Time & Language → Speech → Add voices.</p>
+        </div>` : ''}
+        <details class="bg-gray-50 border-2 border-gray-200 rounded-2xl p-3 cursor-pointer">
+          <summary class="font-bold text-gray-600 text-xs">📋 Senarai suara tersedia (${Object.keys(langGroups).length} bahasa)</summary>
+          <div class="mt-2 space-y-1 max-h-48 overflow-auto">${langList}</div>
+        </details>
+      </div>
+    `,
+    confirmButtonText: '▶️ Uji Audio Sekarang',
+    confirmButtonColor: '#ec4899',
+    showCancelButton: true,
+    cancelButtonText: 'Tutup',
+    cancelButtonColor: '#6b7280',
+  }).then(r => {
+    if (r.isConfirmed) {
+      // Uji dengan ayat pendek dalam bahasa sasaran
+      const sample = (gameState.targetSentence || 'Hello, this is a test.').slice(0, 80);
+      speakText(sample, targetCode);
+    }
+  });
+}
+window.diagnoseAudio = diagnoseAudio;
+
 
 function playCurrentQuestion() {
   const text = (gameState.currentMalay || document.getElementById('malay-sentence').textContent || '').trim();
@@ -912,6 +1044,7 @@ function initEventListeners() {
   document.getElementById('btn-skip-question').addEventListener('click', goNextQuestion);
   document.getElementById('btn-play-question').addEventListener('click', playCurrentQuestion);
   document.getElementById('btn-play-target').addEventListener('click', playTargetSentence);
+  const _diag = document.getElementById('btn-diagnose-audio'); if (_diag) _diag.addEventListener('click', diagnoseAudio);
 
   document.getElementById('btn-generate-more').addEventListener('click', () => fetchQuestionBatch(gameState.currentLevel, true));
   document.getElementById('btn-back-levels').addEventListener('click', () => toggleScreen('screen-levels'));
