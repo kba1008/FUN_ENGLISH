@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND
 // ==========================================
 let GAS_WEB_APP_URL = localStorage.getItem('kacakata_gas_url') ||
-  'https://script.google.com/macros/s/AKfycbz655s0Cy7oWbpRsSLHjtjDj-B59tKWFIZdS55njxyJp2qkZuWxQctQYzcb-lxo9Kxk/exec';
+  'https://script.google.com/macros/s/AKfycbxRffPiil3-rDC9qaMBEnTD-6JUGh92BWctId4yKV4cuqxcTemi209g2B25cpPqrJRw/exec';
 
 // Tetapan Admin
 const ADMIN_PASSWORD = '101010';
