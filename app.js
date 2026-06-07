@@ -1,421 +1,325 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-// ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxtumgq7LSb7zzFLsde6iLW1xthQEJsp92-a5XOrQh2zNLgVCIyHsB-covv0W7zggTl/exec';
+let GAS_WEB_APP_URL = localStorage.getItem('kacakata_gas_url') ||
+  'https://script.google.com/macros/s/AKfycbz655s0Cy7oWbpRsSLHjtjDj-B59tKWFIZdS55njxyJp2qkZuWxQctQYzcb-lxo9Kxk/exec';
+
+// Tetapan Admin
+const ADMIN_PASSWORD = '101010';
+let adminSettings = JSON.parse(localStorage.getItem('kacakata_admin_settings') || '{}');
+if (typeof adminSettings.audioRate !== 'number') adminSettings.audioRate = 0.9;
+if (typeof adminSettings.audioPitch !== 'number') adminSettings.audioPitch = 1.0;
+
+function saveAdminSettings() {
+  localStorage.setItem('kacakata_admin_settings', JSON.stringify(adminSettings));
+}
+
+// Peta Bahasa -> Kod BCP47 (untuk pilih suara TTS yang sesuai)
+const LANG_CODE_MAP = {
+  'Bahasa Inggeris': 'en-US', 'English': 'en-US',
+  'Bahasa Arab': 'ar-SA', 'Arab': 'ar-SA',
+  'Bahasa Jepun': 'ja-JP', 'Jepun': 'ja-JP',
+  'Bahasa Korea': 'ko-KR', 'Korea': 'ko-KR',
+  'Bahasa Mandarin': 'zh-CN', 'Mandarin': 'zh-CN', 'Cina': 'zh-CN',
+  'Bahasa Perancis': 'fr-FR', 'Perancis': 'fr-FR',
+  'Bahasa Sepanyol': 'es-ES', 'Sepanyol': 'es-ES',
+  'Bahasa Jerman': 'de-DE', 'Jerman': 'de-DE',
+  'Bahasa Rusia': 'ru-RU', 'Rusia': 'ru-RU',
+  'Bahasa Thai': 'th-TH', 'Thai': 'th-TH',
+  'Bahasa Itali': 'it-IT', 'Itali': 'it-IT',
+  'Bahasa Melayu': 'ms-MY', 'Melayu': 'ms-MY'
+};
+function getLangCode(name) {
+  if (!name) return 'en-US';
+  if (LANG_CODE_MAP[name]) return LANG_CODE_MAP[name];
+  const lower = name.toLowerCase();
+  for (const k in LANG_CODE_MAP) if (lower.includes(k.toLowerCase().replace('bahasa ',''))) return LANG_CODE_MAP[k];
+  return 'en-US';
+}
+
+let _voicesCache = [];
+function loadVoices() {
+  return new Promise((resolve) => {
+    let v = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+    if (v && v.length) { _voicesCache = v; return resolve(v); }
+    if (!window.speechSynthesis) return resolve([]);
+    speechSynthesis.onvoiceschanged = () => {
+      _voicesCache = speechSynthesis.getVoices();
+      resolve(_voicesCache);
+    };
+    setTimeout(() => resolve(speechSynthesis.getVoices() || []), 800);
+  });
+}
+function pickVoice(langCode) {
+  const voices = _voicesCache.length ? _voicesCache : (window.speechSynthesis ? speechSynthesis.getVoices() : []);
+  if (!voices.length) return null;
+  let exact = voices.find(v => v.lang && v.lang.toLowerCase() === langCode.toLowerCase());
+  if (exact) return exact;
+  const prefix = langCode.split('-')[0].toLowerCase();
+  let near = voices.find(v => v.lang && v.lang.toLowerCase().startsWith(prefix));
+  return near || null;
+}
+
+// Audio guard: hanya satu sesi audio pada satu masa
+let _audioPlaying = false;
+function setAudioButtonsDisabled(disabled) {
+  document.querySelectorAll('[data-audio-btn]').forEach(b => { b.disabled = disabled; });
+}
+async function speakText(text, langName) {
+  if (!text || !window.speechSynthesis) return;
+  if (_audioPlaying) return;
+  _audioPlaying = true;
+  setAudioButtonsDisabled(true);
+  try {
+    await loadVoices();
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const code = getLangCode(langName);
+    u.lang = code;
+    const v = pickVoice(code);
+    if (v) u.voice = v;
+    u.rate = adminSettings.audioRate;
+    u.pitch = adminSettings.audioPitch;
+    await new Promise((resolve) => {
+      u.onend = resolve;
+      u.onerror = resolve;
+      speechSynthesis.speak(u);
+      // safety timeout
+      setTimeout(resolve, Math.max(3000, text.length * 220));
+    });
+  } finally {
+    _audioPlaying = false;
+    setAudioButtonsDisabled(false);
+  }
+}
 
 // State Permainan
 let gameState = {
-  name: '',
-  score: 0,
+  name: '', score: 0,
   targetLanguage: 'Bahasa Inggeris',
   currentLevel: null,
   questionPool: [],
-  currentMalay: '',
-  targetSentence: '',
-  availableWords: [],
-  selectedWords: []
+  currentMalay: '', targetSentence: '',
+  availableWords: [], selectedWords: []
 };
 
 let syncQueue = JSON.parse(localStorage.getItem('kacakata_sync_queue')) || [];
 let audioCtx;
-
 function initAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
 }
 
-// ==========================================
-// TEXT-TO-SPEECH (BACA SOALAN)
-// ==========================================
-const LANG_CODE_MAP = {
-  'bahasa inggeris': 'en-US',
-  'english': 'en-US',
-  'bahasa arab': 'ar-SA',
-  'arabic': 'ar-SA',
-  'bahasa mandarin': 'zh-CN',
-  'mandarin': 'zh-CN',
-  'cina': 'zh-CN',
-  'bahasa jepun': 'ja-JP',
-  'japanese': 'ja-JP',
-  'bahasa korea': 'ko-KR',
-  'korean': 'ko-KR',
-  'bahasa perancis': 'fr-FR',
-  'french': 'fr-FR',
-  'bahasa sepanyol': 'es-ES',
-  'spanish': 'es-ES',
-  'bahasa jerman': 'de-DE',
-  'german': 'de-DE',
-  'bahasa itali': 'it-IT',
-  'italian': 'it-IT',
-  'bahasa tamil': 'ta-IN',
-  'tamil': 'ta-IN',
-  'bahasa hindi': 'hi-IN',
-  'hindi': 'hi-IN',
-  'bahasa thai': 'th-TH',
-  'thai': 'th-TH',
-  'bahasa indonesia': 'id-ID',
-  'bahasa melayu': 'ms-MY',
-  'malay': 'ms-MY'
-};
-
-function getTargetLangCode() {
-  const raw = (gameState.targetLanguage || '').toString().trim().toLowerCase();
-  if (LANG_CODE_MAP[raw]) return LANG_CODE_MAP[raw];
-  // cuba padan separa
-  for (const key in LANG_CODE_MAP) {
-    if (raw.includes(key)) return LANG_CODE_MAP[key];
-  }
-  return 'en-US';
-}
-
-function pickVoice(langPrefix) {
-  const voices = window.speechSynthesis.getVoices();
-  const p = langPrefix.toLowerCase();
-  return voices.find(v => v.lang && v.lang.toLowerCase() === p)
-      || voices.find(v => v.lang && v.lang.toLowerCase().startsWith(p.split('-')[0]))
-      || voices.find(v => v.default)
-      || voices[0];
-}
-
-function speakText(text, langPrefix) {
-  if (!('speechSynthesis' in window)) {
-    Swal.fire('Maaf', 'Pelayar anda tidak menyokong audio bacaan.', 'warning');
-    return;
-  }
-  if (!text) return;
-  window.speechSynthesis.cancel();
-
-  const voice = pickVoice(langPrefix || 'ms');
-  const lang = voice ? voice.lang : (langPrefix && langPrefix.includes('-') ? langPrefix : (langPrefix === 'en' ? 'en-US' : 'ms-MY'));
-
-  // Mod mesra OKU: pecah ayat kepada perkataan, sebut satu-satu dengan jeda.
-  const words = String(text).trim().split(/\s+/).filter(Boolean);
-
-  words.forEach((w, i) => {
-    const utter = new SpeechSynthesisUtterance(w);
-    if (voice) utter.voice = voice;
-    utter.lang = lang;
-    utter.rate = 0.6;   // perlahan & jelas
-    utter.pitch = 1;
-    utter.volume = 1;
-    // jeda antara perkataan dgn ayat kosong pendek selepas setiap perkataan
-    window.speechSynthesis.speak(utter);
-    if (i < words.length - 1) {
-      const pause = new SpeechSynthesisUtterance(' , ');
-      if (voice) pause.voice = voice;
-      pause.lang = lang;
-      pause.rate = 0.6;
-      pause.volume = 0;
-      window.speechSynthesis.speak(pause);
-    }
-  });
-}
-
-// Pastikan senarai suara siap (sesetengah pelayar lazy-load)
-if ('speechSynthesis' in window) {
-  window.speechSynthesis.onvoiceschanged = () => {};
-}
-
-function playCurrentQuestion() {
-  const text = (gameState.currentMalay || document.getElementById('malay-sentence').textContent || '').trim();
-  speakText(text, 'ms');
-}
-
-function playTargetSentence() {
-  const text = (gameState.targetSentence || '').trim();
-  if (!text) {
-    Swal.fire('Belum sedia', 'Soalan belum dimuatkan.', 'info');
-    return;
-  }
-  speakText(text, getTargetLangCode());
-}
-
-// ==========================================
-// SISTEM PENGURUSAN RALAT CANGGIH
-// ==========================================
-/**
- * Memaparkan tetingkap ralat beserta jalan penyelesaian terperinci untuk bantu pengguna.
- */
+// Dialog ralat
 function showErrorDialog(title, errorMsg, solution) {
   Swal.fire({
-    icon: 'error',
-    title: title,
-    html: `
-      <div class="text-left mt-3 text-sm bg-red-50 p-4 rounded-2xl border-2 border-red-200 shadow-inner">
-        <p class="font-extrabold text-red-600 mb-1 flex items-center gap-1"><i data-lucide="alert-triangle" class="w-4 h-4"></i> Punca Masalah:</p>
-        <p class="text-gray-700 mb-4 font-medium">${errorMsg}</p>
-        <p class="font-extrabold text-green-600 mb-1 flex items-center gap-1"><i data-lucide="lightbulb" class="w-4 h-4"></i> Jalan Penyelesaian:</p>
-        <p class="text-gray-700 font-medium">${solution}</p>
-      </div>
-    `,
-    confirmButtonColor: '#ec4899',
-    confirmButtonText: 'Baiklah, Saya Faham',
-    didOpen: () => {
-      lucide.createIcons();
-    }
+    icon: 'error', title,
+    html: `<div class="text-left mt-3 text-sm bg-red-50 p-4 rounded-2xl border-2 border-red-200 shadow-inner">
+      <p class="font-extrabold text-red-600 mb-1">Punca:</p>
+      <p class="text-gray-700 mb-4 font-medium">${errorMsg}</p>
+      <p class="font-extrabold text-green-600 mb-1">Penyelesaian:</p>
+      <p class="text-gray-700 font-medium">${solution}</p></div>`,
+    confirmButtonColor: '#ec4899', confirmButtonText: 'Baiklah'
   });
 }
+window.addEventListener('error', (e) => console.error('Global:', e.error));
 
-// Tangkapan ralat global (Global Error Fallback)
-window.addEventListener('error', function(event) {
-  console.error("Global Error Caught: ", event.error);
-  if (event.error && event.error.message.includes("replace")) {
-    showErrorDialog("Ralat Tidak Dijangka", "Kerosakan pada struktur teks ketika dibaca oleh pelayar.", "Sila segar semula (refresh) halaman ini atau kembali ke halaman utama untuk memuat semula fail sistem.");
-  }
-});
-
-// ==========================================
-// BUNYI SFX CERIA
-// ==========================================
+// SFX
 function playSuccessSound() {
   initAudio();
-  const osc = audioCtx.createOscillator();
-  const gainNode = audioCtx.createGain();
-  osc.type = 'sine';
-  osc.connect(gainNode);
-  gainNode.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  osc.frequency.setValueAtTime(523.25, now);
-  osc.frequency.setValueAtTime(659.25, now + 0.1);
-  osc.frequency.setValueAtTime(783.99, now + 0.2);
-  osc.frequency.setValueAtTime(1046.50, now + 0.3);
-  gainNode.gain.setValueAtTime(0.1, now);
-  gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 1);
-  osc.start(now);
-  osc.stop(now + 1);
+  const osc = audioCtx.createOscillator(); const g = audioCtx.createGain();
+  osc.type='sine'; osc.connect(g); g.connect(audioCtx.destination);
+  const n = audioCtx.currentTime;
+  osc.frequency.setValueAtTime(523.25,n); osc.frequency.setValueAtTime(659.25,n+0.1);
+  osc.frequency.setValueAtTime(783.99,n+0.2); osc.frequency.setValueAtTime(1046.5,n+0.3);
+  g.gain.setValueAtTime(0.1,n); g.gain.exponentialRampToValueAtTime(0.00001,n+1);
+  osc.start(n); osc.stop(n+1);
 }
-
 function playErrorSound() {
   initAudio();
-  const osc = audioCtx.createOscillator();
-  const gainNode = audioCtx.createGain();
-  osc.type = 'square';
-  osc.connect(gainNode);
-  gainNode.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  osc.frequency.setValueAtTime(200, now);
-  osc.frequency.exponentialRampToValueAtTime(50, now + 0.4);
-  gainNode.gain.setValueAtTime(0.05, now);
-  gainNode.gain.exponentialRampToValueAtTime(0.00001, now + 0.4);
-  osc.start(now);
-  osc.stop(now + 0.4);
+  const osc=audioCtx.createOscillator(); const g=audioCtx.createGain();
+  osc.type='square'; osc.connect(g); g.connect(audioCtx.destination);
+  const n=audioCtx.currentTime;
+  osc.frequency.setValueAtTime(200,n); osc.frequency.exponentialRampToValueAtTime(50,n+0.4);
+  g.gain.setValueAtTime(0.05,n); g.gain.exponentialRampToValueAtTime(0.00001,n+0.4);
+  osc.start(n); osc.stop(n+0.4);
 }
 
-// Pendaftaran PWA
+// PWA
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(err => console.error('Ralat SW:', err));
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 
-// ==========================================
-// INIT & PENGURUSAN UI
-// ==========================================
 document.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
   loadLocalData();
   checkNetworkStatus();
-  
-  window.addEventListener('online', () => {
-    checkNetworkStatus();
-    processSyncQueue();
-    if(!document.getElementById('screen-setup').classList.contains('hidden')) {
-      fetchLeaderboard();
-    }
-  });
+  loadVoices();
+  window.addEventListener('online', () => { checkNetworkStatus(); processSyncQueue(); });
   window.addEventListener('offline', checkNetworkStatus);
 });
 
 function loadLocalData() {
-  const savedName = localStorage.getItem('kacakata_name');
-  const savedScore = localStorage.getItem('kacakata_score');
-  
-  if (savedScore) {
-    gameState.score = parseInt(savedScore);
-    document.getElementById('display-score').textContent = gameState.score;
-  }
-  
-  if (savedName) {
-    document.getElementById('input-name').value = savedName;
-    gameState.name = savedName;
-    document.getElementById('display-name').textContent = savedName;
+  const n = localStorage.getItem('kacakata_name');
+  const s = localStorage.getItem('kacakata_score');
+  if (s) { gameState.score = parseInt(s); document.getElementById('display-score').textContent = gameState.score; }
+  if (n) {
+    document.getElementById('input-name').value = n;
+    gameState.name = n; document.getElementById('display-name').textContent = n;
     toggleScreen('screen-language');
   } else {
-    toggleScreen('screen-setup');
-    fetchLeaderboard();
+    toggleScreen('screen-setup'); fetchLeaderboard();
   }
 }
 
 function initEventListeners() {
   document.getElementById('btn-start-game').addEventListener('click', startGameSetup);
-  
-  document.querySelectorAll('.lang-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const lang = e.currentTarget.getAttribute('data-lang');
-      selectLanguage(lang);
-    });
-  });
-
+  document.querySelectorAll('.lang-btn').forEach(btn => btn.addEventListener('click', e => selectLanguage(e.currentTarget.getAttribute('data-lang'))));
   document.getElementById('btn-custom-lang').addEventListener('click', () => {
-    const val = document.getElementById('input-custom-lang').value.trim();
-    if(val) selectLanguage(val);
-    else Swal.fire('Oops!', 'Sila taip nama bahasa di ruangan tersebut.', 'warning');
+    const v = document.getElementById('input-custom-lang').value.trim();
+    if (v) selectLanguage(v); else Swal.fire('Oops!','Sila taip nama bahasa.','warning');
   });
-  
-  document.getElementById('btn-settings').addEventListener('click', () => {
-    toggleScreen('screen-language');
-  });
-
+  document.getElementById('btn-settings').addEventListener('click', () => toggleScreen('screen-language'));
   document.getElementById('btn-logout').addEventListener('click', () => {
-    Swal.fire({
-      title: 'Log Keluar?',
-      text: 'Markah kamu telah disimpan selamat.',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonColor: '#ec4899',
-      cancelButtonColor: '#9ca3af',
-      confirmButtonText: 'Ya, Keluar',
-      cancelButtonText: 'Batal'
-    }).then((result) => {
-      if (result.isConfirmed) {
-        localStorage.removeItem('kacakata_name');
-        localStorage.removeItem('kacakata_score');
-        location.reload();
-      }
-    });
+    Swal.fire({title:'Log Keluar?',icon:'question',showCancelButton:true,confirmButtonColor:'#ec4899',confirmButtonText:'Ya, Keluar',cancelButtonText:'Batal'})
+      .then(r => { if (r.isConfirmed) { localStorage.removeItem('kacakata_name'); localStorage.removeItem('kacakata_score'); location.reload(); }});
   });
-  
-  document.querySelectorAll('.level-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const level = e.currentTarget.getAttribute('data-level');
-      startGameLevel(level);
-    });
-  });
-
+  document.querySelectorAll('.level-btn').forEach(btn => btn.addEventListener('click', e => startGameLevel(e.currentTarget.getAttribute('data-level'))));
   document.getElementById('btn-check').addEventListener('click', checkAnswer);
   document.getElementById('btn-clear').addEventListener('click', clearBoard);
-
-  const btnPlay = document.getElementById('btn-play-question');
-  if (btnPlay) btnPlay.addEventListener('click', playCurrentQuestion);
-
-  const btnPlayTarget = document.getElementById('btn-play-target');
-  if (btnPlayTarget) btnPlayTarget.addEventListener('click', playTargetSentence);
-  
-  document.getElementById('btn-generate-more').addEventListener('click', () => {
-    fetchQuestionBatch(gameState.currentLevel, true);
-  });
-  document.getElementById('btn-back-levels').addEventListener('click', () => {
-    toggleScreen('screen-levels');
-  });
-
+  document.getElementById('btn-listen').addEventListener('click', listenCurrentAnswer);
+  document.getElementById('btn-listen').setAttribute('data-audio-btn','1');
+  document.getElementById('btn-generate-more').addEventListener('click', () => fetchQuestionBatch(gameState.currentLevel, true));
+  document.getElementById('btn-back-levels').addEventListener('click', () => toggleScreen('screen-levels'));
+  document.getElementById('btn-admin').addEventListener('click', openAdminPanel);
   document.body.addEventListener('click', initAudio, { once: true });
 }
 
-function toggleScreen(screenId) {
-  ['screen-setup', 'screen-language', 'screen-levels', 'screen-game'].forEach(id => {
-    document.getElementById(id).classList.add('hidden');
-  });
-  document.getElementById(screenId).classList.remove('hidden');
-  
-  if (screenId === 'screen-setup' || screenId === 'screen-language') {
-    document.getElementById('header-section').classList.add('hidden');
-  } else {
-    document.getElementById('header-section').classList.remove('hidden');
-  }
+function toggleScreen(id) {
+  ['screen-setup','screen-language','screen-levels','screen-game'].forEach(s => document.getElementById(s).classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+  document.getElementById('header-section').classList.toggle('hidden', id==='screen-setup'||id==='screen-language');
 }
 
 // ==========================================
-// LOGIK PENDAFTARAN & BAHASA
+// MOD ADMIN
+// ==========================================
+function openAdminPanel() {
+  Swal.fire({
+    title: '🔐 Mod Admin',
+    input: 'password',
+    inputLabel: 'Masukkan kata laluan admin',
+    inputPlaceholder: '••••••',
+    inputAttributes: { autocapitalize:'off', autocorrect:'off' },
+    showCancelButton: true, confirmButtonColor:'#ec4899', cancelButtonText:'Batal',
+    confirmButtonText: 'Masuk',
+    preConfirm: (val) => {
+      if (val !== ADMIN_PASSWORD) { Swal.showValidationMessage('Kata laluan salah!'); return false; }
+      return true;
+    }
+  }).then(r => { if (r.isConfirmed) showAdminControls(); });
+}
+
+function showAdminControls() {
+  const rate = adminSettings.audioRate;
+  const pitch = adminSettings.audioPitch;
+  Swal.fire({
+    title: '⚙️ Panel Admin',
+    width: 560,
+    html: `
+      <div class="text-left space-y-4 text-sm">
+        <div class="p-4 bg-purple-50 border-2 border-purple-200 rounded-2xl">
+          <label class="block font-bold text-purple-700 mb-2">🔊 Kelajuan Audio: <span id="rate-val">${rate.toFixed(2)}x</span></label>
+          <input id="audio-rate" type="range" min="0.4" max="1.6" step="0.05" value="${rate}" class="w-full">
+          <label class="block font-bold text-purple-700 mt-3 mb-2">🎵 Pitch Audio: <span id="pitch-val">${pitch.toFixed(2)}</span></label>
+          <input id="audio-pitch" type="range" min="0.5" max="1.8" step="0.05" value="${pitch}" class="w-full">
+          <button id="test-audio" class="mt-3 w-full bg-purple-500 text-white font-bold py-2 rounded-xl">▶ Uji Audio</button>
+        </div>
+        <div class="p-4 bg-cyan-50 border-2 border-cyan-200 rounded-2xl">
+          <label class="block font-bold text-cyan-700 mb-2">🔗 URL Backend (Google Apps Script)</label>
+          <input id="gas-url" type="text" value="${GAS_WEB_APP_URL}" class="w-full bg-white border-2 border-cyan-200 rounded-xl px-3 py-2 text-xs">
+        </div>
+        <div class="p-4 bg-red-50 border-2 border-red-200 rounded-2xl space-y-2">
+          <button id="reset-score" class="w-full bg-red-500 text-white font-bold py-2 rounded-xl">🗑️ Reset Markah Tempatan</button>
+          <button id="clear-queue" class="w-full bg-orange-500 text-white font-bold py-2 rounded-xl">🧹 Kosongkan Baris Gilir Sinkronisasi</button>
+          <button id="logout-admin" class="w-full bg-gray-700 text-white font-bold py-2 rounded-xl">🚪 Log Keluar Pelajar</button>
+        </div>
+      </div>
+    `,
+    showCancelButton: true, confirmButtonText: 'Simpan', cancelButtonText: 'Tutup', confirmButtonColor:'#10b981',
+    didOpen: () => {
+      const rateEl = document.getElementById('audio-rate');
+      const pitchEl = document.getElementById('audio-pitch');
+      rateEl.addEventListener('input', () => document.getElementById('rate-val').textContent = parseFloat(rateEl.value).toFixed(2)+'x');
+      pitchEl.addEventListener('input', () => document.getElementById('pitch-val').textContent = parseFloat(pitchEl.value).toFixed(2));
+      document.getElementById('test-audio').addEventListener('click', () => {
+        adminSettings.audioRate = parseFloat(rateEl.value);
+        adminSettings.audioPitch = parseFloat(pitchEl.value);
+        speakText('Hello, this is a test of the audio speed.', gameState.targetLanguage || 'Bahasa Inggeris');
+      });
+      document.getElementById('reset-score').addEventListener('click', () => {
+        gameState.score = 0; localStorage.setItem('kacakata_score',0);
+        document.getElementById('display-score').textContent = 0;
+        Swal.fire('Selesai','Markah tempatan telah direset.','success');
+      });
+      document.getElementById('clear-queue').addEventListener('click', () => {
+        syncQueue = []; localStorage.removeItem('kacakata_sync_queue');
+        Swal.fire('Selesai','Baris gilir kosong.','success');
+      });
+      document.getElementById('logout-admin').addEventListener('click', () => {
+        localStorage.removeItem('kacakata_name'); localStorage.removeItem('kacakata_score'); location.reload();
+      });
+    },
+    preConfirm: () => {
+      adminSettings.audioRate = parseFloat(document.getElementById('audio-rate').value);
+      adminSettings.audioPitch = parseFloat(document.getElementById('audio-pitch').value);
+      const url = document.getElementById('gas-url').value.trim();
+      if (url) { GAS_WEB_APP_URL = url; localStorage.setItem('kacakata_gas_url', url); }
+      saveAdminSettings();
+      return true;
+    }
+  }).then(r => { if (r.isConfirmed) Swal.fire({icon:'success',title:'Tetapan disimpan',timer:1200,showConfirmButton:false}); });
+}
+
+// ==========================================
+// LEADERBOARD & DAFTAR
 // ==========================================
 async function fetchLeaderboard() {
   if (!navigator.onLine) return;
   document.getElementById('leaderboard-section').classList.remove('hidden');
   const listEl = document.getElementById('leaderboard-list');
-  
   try {
-    const res = await fetch(GAS_WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'getLeaderboard' })
-    });
+    const res = await fetch(GAS_WEB_APP_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({action:'getLeaderboard'}) });
     const result = await res.json();
-    
     listEl.innerHTML = '';
     if (result.status === 'success' && result.data.length > 0) {
-      result.data.forEach((p, index) => {
-        let rankIcon = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `<span class="text-cyan-500 font-bold w-6 inline-block text-center">${index+1}.</span>`;
-        listEl.innerHTML += `
-          <div class="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm border-2 border-cyan-50">
-            <span class="font-bold flex items-center gap-3 text-gray-700">
-              <span class="text-xl">${rankIcon}</span> 
-              <span>${p.name}</span>
-            </span>
-            <span class="font-extrabold text-yellow-500 bg-yellow-50 px-3 py-1 rounded-xl border border-yellow-200">${p.score} <span class="text-xs text-yellow-600 font-medium">pt</span></span>
-          </div>
-        `;
+      result.data.forEach((p, i) => {
+        const icon = i===0?'👑':i===1?'🥈':i===2?'🥉':`<span class="text-cyan-500 font-bold w-6 inline-block text-center">${i+1}.</span>`;
+        listEl.innerHTML += `<div class="flex justify-between items-center bg-white p-3 rounded-2xl shadow-sm border-2 border-cyan-50"><span class="font-bold flex items-center gap-3 text-gray-700"><span class="text-xl">${icon}</span><span>${p.name}</span></span><span class="font-extrabold text-yellow-500 bg-yellow-50 px-3 py-1 rounded-xl border border-yellow-200">${p.score} pt</span></div>`;
       });
     } else {
       listEl.innerHTML = '<div class="text-center text-sm text-gray-500 py-2">Jadilah juara yang pertama!</div>';
     }
-  } catch (e) {
-    listEl.innerHTML = '<div class="text-center text-sm text-red-400 py-2">Gagal muat rekod.</div>';
-  }
+  } catch { listEl.innerHTML = '<div class="text-center text-sm text-red-400 py-2">Gagal muat rekod.</div>'; }
 }
 
 async function startGameSetup() {
   const name = document.getElementById('input-name').value.trim();
-  if (!name) return Swal.fire('Alamak!', 'Sila tulis nama kamu dahulu.', 'error');
-
-  if (name.toLowerCase() === (localStorage.getItem('kacakata_name') || '').toLowerCase()) {
-     toggleScreen('screen-language');
-     return;
-  }
-
-  if (!navigator.onLine) return Swal.fire('Luar Talian', 'Perlu internet untuk daftar nama kali pertama.', 'warning');
-
-  Swal.fire({ title: 'Menyemak Nama...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
-
+  if (!name) return Swal.fire('Alamak!','Sila tulis nama kamu.','error');
+  if (name.toLowerCase() === (localStorage.getItem('kacakata_name')||'').toLowerCase()) { toggleScreen('screen-language'); return; }
+  if (!navigator.onLine) return Swal.fire('Luar Talian','Perlu internet untuk daftar.','warning');
+  Swal.fire({title:'Menyemak Nama...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
   try {
-    const response = await fetch(GAS_WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'checkName', name: name })
-    });
-    const data = await response.json();
-
-    if (data.status === 'exists') {
-      const savedScore = parseInt(data.score) || 0;
-      const confirm = await Swal.fire({
-        title: `Selamat kembali, ${name}! 👋`,
-        html: `Nama ini telah berdaftar dengan markah <b>${savedScore}</b>.<br>Sambung semula latihan kamu?`,
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonColor: '#ec4899',
-        cancelButtonColor: '#9ca3af',
-        confirmButtonText: 'Ya, Sambung',
-        cancelButtonText: 'Guna Nama Lain'
-      });
-      if (confirm.isConfirmed) {
-        gameState.name = name;
-        gameState.score = savedScore;
-        localStorage.setItem('kacakata_name', name);
-        localStorage.setItem('kacakata_score', savedScore);
-        document.getElementById('display-name').textContent = name;
-        document.getElementById('display-score').textContent = savedScore;
-        toggleScreen('screen-language');
-      }
-    } else {
-      Swal.close();
-      gameState.name = name;
-      gameState.score = 0;
-      localStorage.setItem('kacakata_name', name);
-      localStorage.setItem('kacakata_score', 0);
-      document.getElementById('display-name').textContent = name;
-      document.getElementById('display-score').textContent = 0;
-      toggleScreen('screen-language');
-    }
-  } catch (error) {
-    Swal.fire('Ralat Talian', 'Gagal sambung ke pangkalan data.', 'error');
-  }
+    const res = await fetch(GAS_WEB_APP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'checkName',name})});
+    const data = await res.json();
+    if (data.status === 'exists') { Swal.fire('Oops',data.message,'error'); return; }
+    Swal.close();
+    gameState.name = name; gameState.score = 0;
+    localStorage.setItem('kacakata_name',name); localStorage.setItem('kacakata_score',0);
+    document.getElementById('display-name').textContent = name;
+    document.getElementById('display-score').textContent = 0;
+    toggleScreen('screen-language');
+  } catch { Swal.fire('Ralat Talian','Gagal sambung ke pangkalan data.','error'); }
 }
 
 function selectLanguage(lang) {
@@ -427,16 +331,14 @@ function selectLanguage(lang) {
 }
 
 // ==========================================
-// LOGIK PERMAINAN & SOALAN
+// PERMAINAN
 // ==========================================
 function startGameLevel(level) {
-  if (!GAS_WEB_APP_URL.startsWith('https://script.google.com/')) return Swal.fire('Perhatian', 'Sila setup Web App URL', 'warning');
-  
+  if (!GAS_WEB_APP_URL.startsWith('https://script.google.com/')) return Swal.fire('Perhatian','Sila setup Web App URL melalui Admin','warning');
   gameState.currentLevel = level;
   document.getElementById('current-level-badge').textContent = `Tahap ${level}`;
   toggleScreen('screen-game');
   document.getElementById('end-batch-ui').classList.add('hidden');
-  
   fetchQuestionBatch(level, false);
 }
 
@@ -444,78 +346,41 @@ async function fetchQuestionBatch(level, forceRegenerate) {
   document.getElementById('loading-indicator').classList.remove('hidden');
   document.getElementById('game-content').classList.add('hidden');
   document.getElementById('end-batch-ui').classList.add('hidden');
-  
   document.getElementById('loading-text').textContent = forceRegenerate ? 'Membina silibus baru...' : 'Menyemak buku latihan AI...';
-
   try {
-    const response = await fetch(GAS_WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'getBatchQuestions',
-        level: level,
-        language: gameState.targetLanguage,
-        forceRegenerate: forceRegenerate
-      })
-    });
-    
-    if (!response.ok) throw new Error(`Rangkaian gagal berhubung ke pelayan.`);
-    const result = await response.json();
+    const res = await fetch(GAS_WEB_APP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'getBatchQuestions',level,language:gameState.targetLanguage,forceRegenerate})});
+    if (!res.ok) throw new Error('Rangkaian gagal.');
+    const result = await res.json();
     if (result.status === 'error') throw new Error(result.message);
+    if (!Array.isArray(result.data)) throw new Error('Format data tidak sah.');
 
-    if (!result.data || !Array.isArray(result.data)) {
-        throw new Error("Maklumat diterima bukan tatasusunan (Array) senarai soalan yang sah.");
-    }
-
-    // AUTO-NORMALIZE: terima pelbagai variasi key dari AI
-    const pick = (o, keys) => {
-      if (!o) return undefined;
-      for (const k of keys) {
-        const found = Object.keys(o).find(x => x.toLowerCase().trim() === k.toLowerCase());
-        if (found && o[found] != null) return o[found];
-      }
-      return undefined;
-    };
+    const pick = (o,keys) => { if(!o) return; for (const k of keys){ const f=Object.keys(o).find(x=>x.toLowerCase().trim()===k.toLowerCase()); if (f && o[f]!=null) return o[f]; } };
     const normalized = result.data.map(q => {
-      if (!q || typeof q !== 'object') return null;
-      const malay = pick(q, ['malay','melayu','bm','bahasa_melayu','source']);
-      const target = pick(q, ['target_sentence','target','translation','english','sentence','ayat']);
-      let words = pick(q, ['words','word_list','tokens','perkataan']);
-      if (!malay || !target) return null;
-      if (!Array.isArray(words)) {
-        words = String(target).split(/\s+/).filter(Boolean).map(w => ({ word: w, pron: w }));
-      }
+      if (!q||typeof q!=='object') return null;
+      const malay = pick(q,['malay','melayu','bm','bahasa_melayu','source']);
+      const target = pick(q,['target_sentence','target','translation','english','sentence','ayat']);
+      let words = pick(q,['words','word_list','tokens','perkataan']);
+      if (!malay||!target) return null;
+      if (!Array.isArray(words)) words = String(target).split(/\s+/).filter(Boolean).map(w=>({word:w,pron:w}));
       words = words.map(w => {
-        if (typeof w === 'string') return { word: w, pron: w };
-        if (!w || typeof w !== 'object') return null;
-        const word = pick(w, ['word','text','token','perkataan']);
-        const pron = pick(w, ['pron','pronunciation','sebutan','phonetic','ipa','romaji']);
-        return word ? { word: String(word), pron: String(pron || word) } : null;
+        if (typeof w==='string') return {word:w,pron:w};
+        if (!w||typeof w!=='object') return null;
+        const word = pick(w,['word','text','token','perkataan']);
+        const pron = pick(w,['pron','pronunciation','sebutan','phonetic','ipa','romaji']);
+        return word ? {word:String(word), pron:String(pron||word)} : null;
       }).filter(Boolean);
-      if (words.length === 0) return null;
-      return { malay: String(malay), target_sentence: String(target), words };
+      if (!words.length) return null;
+      return { malay:String(malay), target_sentence:String(target), words };
     }).filter(Boolean);
 
-    if (normalized.length === 0) {
-        // AUTO-RECOVERY: cuba sekali lagi dengan forceRegenerate jika belum
-        if (!forceRegenerate) {
-          console.warn('Data korup diterima, auto-regenerate...');
-          return fetchQuestionBatch(level, true);
-        }
-        throw new Error("Format data soalan korup. Kekunci (keys) seperti 'malay', 'target_sentence' atau 'words' tidak wujud.");
+    if (!normalized.length) {
+      if (!forceRegenerate) return fetchQuestionBatch(level, true);
+      throw new Error('Format soalan korup.');
     }
-
     gameState.questionPool = shuffleArray(normalized);
     loadNextQuestionFromPool();
-
-  } catch (error) {
-    let solution = "Sila periksa sambungan internet anda dan cuba sekali lagi.";
-    if (error.message.includes("Format") || error.message.includes("korup") || error.message.includes("sah")) {
-      solution = "Sistem telah cuba auto-pulih tetapi gagal. Sila tekan butang Tahap sekali lagi — jika masih gagal, buka Google Sheets > Admin Game > Padam Cache Soalan.";
-    } else if (error.message.includes("API") || error.message.includes("Groq")) {
-      solution = "Sila pastikan API Key Groq yang dimasukkan ke dalam sheet 'API_KEY' adalah sah, tepat, dan belum tamat tempoh penggunaannya.";
-    }
-    showErrorDialog('Ralat Memuatkan Soalan ⚠️', error.message, solution);
+  } catch (e) {
+    showErrorDialog('Ralat Memuatkan Soalan', e.message, 'Sila cuba semula atau guna Admin > Reset.');
     toggleScreen('screen-levels');
   } finally {
     document.getElementById('loading-indicator').classList.add('hidden');
@@ -523,245 +388,186 @@ async function fetchQuestionBatch(level, forceRegenerate) {
 }
 
 function loadNextQuestionFromPool() {
-  if (gameState.questionPool.length === 0) {
+  if (!gameState.questionPool.length) {
     document.getElementById('game-content').classList.add('hidden');
     document.getElementById('end-batch-ui').classList.remove('hidden');
-    playSuccessSound(); 
-    return;
+    playSuccessSound(); return;
   }
-  
   document.getElementById('questions-left-badge').textContent = `Baki: ${gameState.questionPool.length}`;
-  let currentQ = gameState.questionPool[0];
-  setupBoard(currentQ.malay, currentQ.target_sentence, currentQ.words);
+  const q = gameState.questionPool[0];
+  setupBoard(q.malay, q.target_sentence, q.words);
 }
 
 async function fetchClueFromAI() {
-  if (!navigator.onLine) {
-    Swal.fire('Hampir!', 'Sila susun semula.', 'warning');
-    clearBoard();
-    return;
-  }
+  if (!navigator.onLine) { Swal.fire('Hampir!','Sila susun semula.','warning'); clearBoard(); return; }
   try {
-    const response = await fetch(GAS_WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'getClue',
-        malay: gameState.currentMalay,
-        english: gameState.targetSentence,
-        language: gameState.targetLanguage
-      })
-    });
-    const result = await response.json();
-    if (result.status === 'success') {
-      Swal.fire({
-        title: 'Klu Cikgu AI 💡',
-        text: result.data,
-        icon: 'info',
-        confirmButtonColor: '#06b6d4',
-        confirmButtonText: 'Terima Kasih Cikgu'
-      });
-    }
-  } catch (error) {
-    Swal.fire('Hampir Tepat!', 'Cuba ubah sikit.', 'warning');
-  }
+    const r = await fetch(GAS_WEB_APP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'getClue',malay:gameState.currentMalay,english:gameState.targetSentence,language:gameState.targetLanguage})});
+    const result = await r.json();
+    if (result.status==='success') Swal.fire({title:'Klu Cikgu AI 💡',text:result.data,icon:'info',confirmButtonColor:'#06b6d4',confirmButtonText:'Terima Kasih'});
+  } catch { Swal.fire('Hampir Tepat!','Cuba ubah sikit.','warning'); }
   clearBoard();
 }
 
 // ==========================================
-// PAPAN JAWAPAN (BOARD UI CERIA)
+// PAPAN JAWAPAN (DENGAN DRAG-REORDER)
 // ==========================================
+let sortablePool = null, sortableAnswer = null;
+
 function setupBoard(malay, targetSentence, wordsArray) {
   try {
-    if (!malay || !targetSentence || !wordsArray || !Array.isArray(wordsArray)) {
-      throw new Error("Sebahagian data objek soalan (malay, target_sentence, atau wordsArray) tidak lengkap/undefined.");
-    }
-    
-    gameState.currentMalay = malay.toString();
-    // PENGURUSAN RALAT: Penambahan .toString() memastikan nilai yang dihantar diproses sebagai String elak ralat Cannot read properties of undefined (reading 'replace').
-    gameState.targetSentence = targetSentence.toString().replace(/[.,!?]/g, '').trim();
+    gameState.currentMalay = String(malay);
+    gameState.targetSentence = String(targetSentence).replace(/[.,!?؟。、，]/g,'').trim();
     gameState.selectedWords = [];
-    
     document.getElementById('malay-sentence').textContent = malay;
     document.getElementById('game-content').classList.remove('hidden');
-
-    let shuffledWords = shuffleArray([...wordsArray]);
-    gameState.availableWords = shuffledWords.map((item, index) => ({
-      id: `word-${index}`,
-      word: item.word,
-      pron: item.pron
-    }));
-    
+    const shuffled = shuffleArray([...wordsArray]);
+    gameState.availableWords = shuffled.map((it,i) => ({ id:`word-${i}-${Date.now()}`, word: it.word, pron: it.pron }));
     renderBoard();
-  } catch (error) {
-    showErrorDialog("Ralat Penyediaan Papan Jawapan", error.message, "Sila kembali ke pilihan tahap (Back) dan pilih tahap tersebut semula. Modul di dalam cache ini mungkin korup dan perlu dijana baru sekiranya ralat berterusan.");
+  } catch (e) {
+    showErrorDialog('Ralat Papan', e.message, 'Sila kembali dan cuba semula.');
     toggleScreen('screen-levels');
   }
 }
 
-function shuffleArray(array) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-}
+function shuffleArray(a) { for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
 
 function renderBoard() {
   const poolEl = document.getElementById('word-pool');
-  const answerEl = document.getElementById('answer-area');
-  
+  const ansEl = document.getElementById('answer-area');
+  const placeholder = document.getElementById('answer-placeholder');
+
   poolEl.innerHTML = '';
-  Array.from(answerEl.children).forEach(child => {
-    if(!child.classList.contains('absolute')) answerEl.removeChild(child);
-  });
+  Array.from(ansEl.querySelectorAll('.word-tile')).forEach(el => el.remove());
 
-  gameState.availableWords.forEach(wordObj => {
-    const btn = createWordTile(wordObj, () => moveWord(wordObj, 'toAnswer'));
-    poolEl.appendChild(btn);
-  });
+  gameState.availableWords.forEach(w => poolEl.appendChild(createWordTile(w,'pool')));
+  gameState.selectedWords.forEach(w => ansEl.appendChild(createWordTile(w,'answer')));
 
-  gameState.selectedWords.forEach(wordObj => {
-    const btn = createWordTile(wordObj, () => moveWord(wordObj, 'toPool'));
-    btn.classList.replace('border-cyan-400', 'border-pink-500');
-    btn.classList.replace('bg-white', 'bg-pink-50');
-    btn.style.zIndex = 10;
-    answerEl.appendChild(btn);
+  if (placeholder) placeholder.style.display = gameState.selectedWords.length ? 'none' : 'block';
+
+  // Inisialisasi Sortable untuk drag-reorder
+  if (sortableAnswer) sortableAnswer.destroy();
+  if (sortablePool) sortablePool.destroy();
+  sortableAnswer = Sortable.create(ansEl, {
+    group: 'words', animation: 180, filter: '.absolute', preventOnFilter: false,
+    onEnd: syncStateFromDOM
+  });
+  sortablePool = Sortable.create(poolEl, {
+    group: 'words', animation: 180, onEnd: syncStateFromDOM
   });
 }
 
-function createWordTile(wordObj, clickHandler) {
+function syncStateFromDOM() {
+  const ansEl = document.getElementById('answer-area');
+  const poolEl = document.getElementById('word-pool');
+  const collect = (parent) => Array.from(parent.querySelectorAll('.word-tile')).map(el => ({
+    id: el.dataset.id, word: el.dataset.word, pron: el.dataset.pron
+  }));
+  gameState.selectedWords = collect(ansEl);
+  gameState.availableWords = collect(poolEl);
+  const placeholder = document.getElementById('answer-placeholder');
+  if (placeholder) placeholder.style.display = gameState.selectedWords.length ? 'none' : 'block';
+}
+
+function createWordTile(wordObj, area) {
   const div = document.createElement('div');
-  div.className = 'word-tile bg-white border-4 border-cyan-400 text-gray-800 font-bold py-2 px-4 rounded-2xl shadow-sm flex flex-col items-center justify-center min-w-[70px] z-10';
-  
+  div.className = 'word-tile bg-white border-4 text-gray-800 font-bold py-2 px-4 rounded-2xl shadow-sm flex flex-col items-center justify-center min-w-[70px] z-10 ' +
+    (area==='answer' ? 'border-pink-500 bg-pink-50' : 'border-cyan-400');
+  div.dataset.id = wordObj.id; div.dataset.word = wordObj.word; div.dataset.pron = wordObj.pron || '';
+
+  const top = document.createElement('div');
+  top.className = 'flex items-center gap-1';
   const wordSpan = document.createElement('span');
   wordSpan.className = 'text-xl drop-shadow-sm';
   wordSpan.textContent = wordObj.word;
-  
+  top.appendChild(wordSpan);
+
+  // Butang audio kecil per perkataan
+  const spk = document.createElement('button');
+  spk.className = 'ml-1 p-1 rounded-full bg-purple-100 text-purple-600 hover:bg-purple-200';
+  spk.setAttribute('data-audio-btn','1');
+  spk.title = 'Dengar perkataan';
+  spk.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>';
+  spk.onclick = (e) => { e.stopPropagation(); speakText(wordObj.word, gameState.targetLanguage); };
+  top.appendChild(spk);
+
   const pronSpan = document.createElement('span');
   pronSpan.className = 'text-xs text-pink-500 mt-1 font-medium bg-pink-50 px-2 py-0.5 rounded-full';
   pronSpan.textContent = wordObj.pron || '-';
-  
-  div.appendChild(wordSpan);
-  div.appendChild(pronSpan);
-  div.onclick = clickHandler;
+
+  div.appendChild(top); div.appendChild(pronSpan);
+
+  // Click untuk pindah cepat (selain drag)
+  div.onclick = () => {
+    initAudio();
+    if (area === 'pool') {
+      gameState.availableWords = gameState.availableWords.filter(w => w.id !== wordObj.id);
+      gameState.selectedWords.push(wordObj);
+    } else {
+      gameState.selectedWords = gameState.selectedWords.filter(w => w.id !== wordObj.id);
+      gameState.availableWords.push(wordObj);
+    }
+    renderBoard();
+  };
   return div;
 }
 
-function moveWord(wordObj, direction) {
-  initAudio(); 
-  if (direction === 'toAnswer') {
-    gameState.availableWords = gameState.availableWords.filter(w => w.id !== wordObj.id);
-    gameState.selectedWords.push(wordObj);
-  } else {
-    gameState.selectedWords = gameState.selectedWords.filter(w => w.id !== wordObj.id);
-    gameState.availableWords.push(wordObj);
-  }
-  renderBoard();
-}
-
 function clearBoard() {
-  if (gameState.selectedWords.length > 0) {
+  if (gameState.selectedWords.length) {
     gameState.availableWords = [...gameState.availableWords, ...gameState.selectedWords];
     gameState.selectedWords = [];
     renderBoard();
   }
 }
 
-// ==========================================
-// SEMAKAN JAWAPAN
-// ==========================================
+function listenCurrentAnswer() {
+  syncStateFromDOM();
+  const text = gameState.selectedWords.map(w => w.word).join(' ').trim();
+  if (!text) { Swal.fire({icon:'info',title:'Letak perkataan dahulu',timer:1200,showConfirmButton:false}); return; }
+  speakText(text, gameState.targetLanguage);
+}
+
 function checkAnswer() {
-  if (gameState.selectedWords.length === 0) return;
-
-  const userAnswer = gameState.selectedWords.map(w => w.word).join(' ').toLowerCase().trim();
-  const correctAnswer = gameState.targetSentence.toLowerCase().trim();
-
-  if (userAnswer === correctAnswer) {
+  syncStateFromDOM();
+  if (!gameState.selectedWords.length) return;
+  const user = gameState.selectedWords.map(w=>w.word).join(' ').toLowerCase().trim();
+  const correct = gameState.targetSentence.toLowerCase().trim();
+  if (user === correct) {
     playSuccessSound();
-    let points = parseInt(gameState.currentLevel) * 15; 
-    gameState.score += points;
-    localStorage.setItem('kacakata_score', gameState.score);
+    const pts = parseInt(gameState.currentLevel) * 15;
+    gameState.score += pts;
+    localStorage.setItem('kacakata_score',gameState.score);
     document.getElementById('display-score').textContent = gameState.score;
-    
     syncScoreToGAS(gameState.score);
-
-    Swal.fire({
-      title: 'Tepat Sekali! 🌟',
-      text: `Dapat +${points} Markah`,
-      icon: 'success',
-      timer: 1500,
-      showConfirmButton: false,
-      backdrop: `rgba(236, 72, 153, 0.4)`
-    }).then(() => {
-      gameState.questionPool.shift(); 
-      loadNextQuestionFromPool();
-    });
+    // Sebut jawapan dalam bahasa sasaran sebagai pengukuhan
+    speakText(gameState.targetSentence, gameState.targetLanguage);
+    Swal.fire({title:'Tepat Sekali! 🌟',text:`+${pts} Markah`,icon:'success',timer:1500,showConfirmButton:false,backdrop:'rgba(236,72,153,0.4)'})
+      .then(()=>{ gameState.questionPool.shift(); loadNextQuestionFromPool(); });
   } else {
     playErrorSound();
-    Swal.fire({ title: 'Menyemak...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    Swal.fire({title:'Menyemak...',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
     fetchClueFromAI();
   }
 }
 
-// ==========================================
-// PENGHANTARAN DATA & OFFLINE
-// ==========================================
 function checkNetworkStatus() {
-  const isOnline = navigator.onLine;
-  const icon = document.getElementById('wifi-icon');
-  const text = document.getElementById('sync-text');
-  
-  if (isOnline) {
-    icon.setAttribute('data-lucide', 'wifi');
-    icon.classList.remove('text-red-500');
-    icon.classList.add('text-cyan-500');
-    text.textContent = 'Online';
-  } else {
-    icon.setAttribute('data-lucide', 'wifi-off');
-    icon.classList.remove('text-cyan-500');
-    icon.classList.add('text-red-500');
-    text.textContent = 'Offline';
-  }
+  const on = navigator.onLine;
+  const i = document.getElementById('wifi-icon'); const t = document.getElementById('sync-text');
+  i.setAttribute('data-lucide', on?'wifi':'wifi-off');
+  i.classList.toggle('text-cyan-500', on); i.classList.toggle('text-red-500', !on);
+  t.textContent = on?'Online':'Offline';
   lucide.createIcons();
 }
-
-async function syncScoreToGAS(currentScore) {
-  const payload = {
-    action: 'saveScore',
-    name: gameState.name,
-    score: currentScore,
-    level: gameState.currentLevel,
-    isOfflineSync: false
-  };
-
-  if (!navigator.onLine) {
-    payload.isOfflineSync = true;
-    syncQueue.push(payload);
-    localStorage.setItem('kacakata_sync_queue', JSON.stringify(syncQueue));
-    return;
-  }
-  sendData(payload);
+async function syncScoreToGAS(s) {
+  const p = { action:'saveScore', name:gameState.name, score:s, level:gameState.currentLevel, isOfflineSync:false };
+  if (!navigator.onLine) { p.isOfflineSync=true; syncQueue.push(p); localStorage.setItem('kacakata_sync_queue',JSON.stringify(syncQueue)); return; }
+  sendData(p);
 }
-
 async function processSyncQueue() {
-  if (syncQueue.length === 0 || !navigator.onLine) return;
-  const currentQueue = [...syncQueue];
-  syncQueue = [];
-  localStorage.setItem('kacakata_sync_queue', JSON.stringify(syncQueue));
-  for (let payload of currentQueue) await sendData(payload);
+  if (!syncQueue.length||!navigator.onLine) return;
+  const cur=[...syncQueue]; syncQueue=[]; localStorage.setItem('kacakata_sync_queue',JSON.stringify(syncQueue));
+  for (const p of cur) await sendData(p);
 }
-
-async function sendData(payload) {
-  try {
-    await fetch(GAS_WEB_APP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload)
-    });
-  } catch (err) {
-    payload.isOfflineSync = true;
-    syncQueue.push(payload);
-    localStorage.setItem('kacakata_sync_queue', JSON.stringify(syncQueue));
-  }
+async function sendData(p) {
+  try { await fetch(GAS_WEB_APP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(p)}); }
+  catch { p.isOfflineSync=true; syncQueue.push(p); localStorage.setItem('kacakata_sync_queue',JSON.stringify(syncQueue)); }
 }
