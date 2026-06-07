@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxqsGmAPBGcQfy6zkzC9z-nKyXG9phMwD_tl5CNLujWK7Sj6m_C_74sYZUC8B72g81K/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -512,7 +512,7 @@ const VOICE_FALLBACK = {
   'ms-MY': ['ms-MY', 'ms', 'id-ID', 'id'],
   'ta-IN': ['ta-IN', 'ta', 'hi-IN', 'hi'],
   'hi-IN': ['hi-IN', 'hi'],
-  'ar-SA': ['ar-SA', 'ar-EG', 'ar-XA', 'ar'],
+  'ar-SA': ['ar-SA','ar-EG','ar-AE','ar-JO','ar-LB','ar-MA','ar-DZ','ar-TN','ar-IQ','ar-KW','ar-QA','ar-BH','ar-OM','ar-YE','ar-SY','ar-PS','ar-001','ar-XA','ar'],
   'th-TH': ['th-TH', 'th'],
   'zh-CN': ['zh-CN', 'zh-TW', 'zh-HK', 'zh'],
   'ja-JP': ['ja-JP', 'ja'],
@@ -706,16 +706,23 @@ function speakText(text, langCode, onAllDone) {
 
 // Cari voice yang BENAR-BENAR padan dengan langCode (bukan fallback ke voice default)
 function _matchVoiceForLang(langCode) {
-  const voices = (window.speechSynthesis.getVoices() || []);
+  const live = (window.speechSynthesis.getVoices() || []);
+  const voices = live.length ? live : (_cachedVoices || []);
   if (!voices.length) return { voice: null, matched: false, reason: 'no-voices' };
   const chain = VOICE_FALLBACK[langCode] || [langCode, langCode.split('-')[0]];
   for (const tag of chain) {
     const t = tag.toLowerCase();
-    let v = voices.find(x => x.lang && x.lang.toLowerCase() === t);
+    let v = voices.find(x => x.lang && x.lang.toLowerCase().replace('_','-') === t);
     if (v) return { voice: v, matched: true };
-    v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(t + '-'));
+    v = voices.find(x => x.lang && x.lang.toLowerCase().replace('_','-').startsWith(t + '-'));
     if (v) return { voice: v, matched: true };
-    v = voices.find(x => x.lang && x.lang.toLowerCase() === t.split('-')[0]);
+    v = voices.find(x => x.lang && x.lang.toLowerCase().replace('_','-').split('-')[0] === t.split('-')[0]);
+    if (v) return { voice: v, matched: true };
+  }
+  // Generik: cuba apa-apa voice yang prefix bahasa sama (cth 'ar' apa pun rantau)
+  const base = (langCode || '').toLowerCase().split('-')[0];
+  if (base) {
+    const v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(base));
     if (v) return { voice: v, matched: true };
   }
   return { voice: null, matched: false, reason: 'lang-not-installed' };
@@ -846,8 +853,8 @@ function diagnoseAudio() {
         <div class="bg-gray-50 border-2 border-gray-200 rounded-2xl p-3 space-y-1">
           <div>${tick(supported)} Sokongan TTS browser</div>
           <div>${tick(voices.length>0)} Suara dimuatkan: <b>${voices.length}</b></div>
-          <div>${tick(tMatch.matched)} Bahasa sasaran <b>${targetCode}</b> ${tMatch.matched ? '→ '+(tMatch.voice.name||tMatch.voice.lang) : '(tiada suara)'}</div>
-          <div>${tick(mMatch.matched)} Bahasa ibunda <b>${motherCode}</b> ${mMatch.matched ? '→ '+(mMatch.voice.name||mMatch.voice.lang) : '(tiada suara)'}</div>
+          <div>${tMatch.matched ? '✅' : '⚠️'} Bahasa sasaran <b>${targetCode}</b> ${tMatch.matched ? '→ '+(tMatch.voice.name||tMatch.voice.lang) : '— akan cuba enjin OS'}</div>
+          <div>${mMatch.matched ? '✅' : '⚠️'} Bahasa ibunda <b>${motherCode}</b> ${mMatch.matched ? '→ '+(mMatch.voice.name||mMatch.voice.lang) : '— akan cuba enjin OS'}</div>
           <div>📱 Browser: <b>${browserShort}</b></div>
         </div>
         ${(!tMatch.matched || !mMatch.matched) ? `

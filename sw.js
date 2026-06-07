@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kacakata-v18-mobilefix';
+const CACHE_NAME = 'kacakata-v19-arabic';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
