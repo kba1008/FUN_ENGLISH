@@ -439,14 +439,17 @@ function applyI18n() {
 // Tetapan admin
 // ==========================================
 let adminSettings = JSON.parse(localStorage.getItem('kacakata_admin_settings')) || {
-  audioRate: 0.95,
+  audioRate: 0.85,
   audioPitch: 1.0,
-  audioWordPause: false,   // DEFAULT off — audio lebih natural, tak robotik
+  audioWordPause: true,    // DEFAULT on — baca perkataan satu-satu (mesra OKU lembam)
+  audioWordGap: 250,       // ms jeda antara perkataan
   defaultMotherTongue: 'Bahasa Melayu',
   passwordHash: '101010'
 };
-// Migrasi tetapan lama yang masih ada audioWordPause=true atau rate=0.7
-if (adminSettings.audioRate <= 0.75) adminSettings.audioRate = 0.95;
+// Migrasi tetapan lama
+if (!(adminSettings.audioRate > 0.4 && adminSettings.audioRate <= 1.4)) adminSettings.audioRate = 0.85;
+if (typeof adminSettings.audioWordPause !== 'boolean') adminSettings.audioWordPause = true;
+if (typeof adminSettings.audioWordGap !== 'number') adminSettings.audioWordGap = 250;
 function saveAdminSettings() { localStorage.setItem('kacakata_admin_settings', JSON.stringify(adminSettings)); }
 
 // State Permainan
@@ -656,13 +659,18 @@ function _showTtsError(errorCode, langCode, voiceName, speechStarted) {
           <div class="mt-2 text-xs text-gray-600 leading-relaxed">${debugLines}</div>
         </details>
       </div>`,
-    confirmButtonColor: '#ec4899',
-    confirmButtonText: 'OK, Faham',
+    confirmButtonColor: '#f59e0b',
+    confirmButtonText: '🔁 Pulihkan Audio',
+    showDenyButton: true,
+    denyButtonText: '📋 Salin Info',
+    denyButtonColor: '#6b7280',
     showCancelButton: true,
-    cancelButtonText: '📋 Salin Info',
-    cancelButtonColor: '#6b7280',
+    cancelButtonText: 'Tutup',
+    cancelButtonColor: '#9ca3af',
   }).then(r => {
-    if (r.dismiss === Swal.DismissReason.cancel) {
+    if (r.isConfirmed) {
+      restoreAudio();
+    } else if (r.isDenied) {
       const plain = [
         `Ralat: ${errorCode || 'tiada'}`,
         `Bahasa: ${langCode}`,
@@ -734,56 +742,54 @@ function _speakNow(str, langCode, onAllDone) {
 
   const match = _matchVoiceForLang(langCode || 'en-US');
   const voice = match.voice;
-  // PENTING: walaupun tiada voice padan, JANGAN tolak.
-  // Android Chrome selalunya getVoices()=[] tetapi enjin TTS sokong bahasa via utter.lang.
-  // Biar enjin OS cuba; jika benar-benar gagal, onerror akan trigger _showTtsError.
   const lang  = voice ? voice.lang : (langCode || 'en-US');
-  const rate  = (adminSettings.audioRate  > 0) ? adminSettings.audioRate  : 0.95;
+  // Kuatkuasa kelajuan admin untuk SEMUA bahasa
+  const rate  = (adminSettings.audioRate  > 0) ? adminSettings.audioRate  : 0.85;
   const pitch = (adminSettings.audioPitch > 0) ? adminSettings.audioPitch : 1.0;
+  const gap   = Math.max(0, adminSettings.audioWordGap || 0);
   const voiceName = voice ? (voice.name || voice.lang) : '(auto/OS engine)';
 
-  const words = adminSettings.audioWordPause
-    ? str.split(/\s+/).filter(Boolean)
-    : [str];
+  // Pelajar OKU lembam: SENTIASA pecah ikut perkataan (abaikan tetapan lama jika false).
+  // Tanda baca dibersihkan supaya tidak dibaca sebagai simbol.
+  const words = str
+    .split(/\s+/)
+    .map(w => w.replace(/[.,;:!?¿¡"()\[\]{}–—]/g, '').trim())
+    .filter(Boolean);
+  if (words.length === 0) { if (onAllDone) onAllDone(); unlockAudioButtons(); return; }
 
   let idx = 0;
   let _watchdog;
-  let _keepalive;
+  let _gapTimer;
   let _speechStarted = false;
 
-  function stopKeepalive() { if (_keepalive) { clearInterval(_keepalive); _keepalive = null; } }
+  function cleanupTimers() {
+    clearTimeout(_watchdog);
+    clearTimeout(_gapTimer);
+  }
 
   function speakNext() {
-    clearTimeout(_watchdog);
-    stopKeepalive();
+    cleanupTimers();
     if (idx >= words.length) {
       unlockAudioButtons();
       if (onAllDone) onAllDone();
       return;
     }
-    const utter = new SpeechSynthesisUtterance(words[idx++]);
+    const word = words[idx++];
+    const utter = new SpeechSynthesisUtterance(word);
     if (voice) utter.voice = voice;
     utter.lang   = lang;
     utter.rate   = rate;
     utter.pitch  = pitch;
     utter.volume = 1;
 
-    utter.onstart = () => {
-      _speechStarted = true;
-      // Chrome desktop bug: TTS berhenti selepas ~15s. Pause/resume keepalive.
-      _keepalive = setInterval(() => {
-        try {
-          if (window.speechSynthesis.speaking) {
-            window.speechSynthesis.pause();
-            window.speechSynthesis.resume();
-          }
-        } catch(e) {}
-      }, 10000);
+    utter.onstart = () => { _speechStarted = true; };
+    utter.onend = () => {
+      cleanupTimers();
+      // Jeda kecil antara perkataan supaya pelajar boleh ikut
+      _gapTimer = setTimeout(speakNext, gap);
     };
-    utter.onend = () => { stopKeepalive(); speakNext(); };
     utter.onerror = (e) => {
-      clearTimeout(_watchdog);
-      stopKeepalive();
+      cleanupTimers();
       unlockAudioButtons();
       if (onAllDone) onAllDone();
       const code = (e && e.error) ? e.error : '';
@@ -794,26 +800,29 @@ function _speakNow(str, langCode, onAllDone) {
     try {
       window.speechSynthesis.speak(utter);
     } catch (err) {
-      stopKeepalive();
+      cleanupTimers();
       unlockAudioButtons();
       if (onAllDone) onAllDone();
       _showTtsError('invalid-argument', lang, voiceName, false);
       return;
     }
 
-    // Watchdog: jika audio tidak bermula dalam 8s, ada masalah enjin (Android perlu warm-up lama)
-    _watchdog = setTimeout(() => {
-      if (!_speechStarted) {
-        try { window.speechSynthesis.cancel(); } catch(e) {}
-        stopKeepalive();
-        unlockAudioButtons();
-        if (onAllDone) onAllDone();
-        _showTtsError('synthesis-failed', lang, voiceName, false);
-      }
-    }, 8000);
+    // Watchdog 8s untuk perkataan pertama sahaja (warm-up Android lambat)
+    if (idx === 1) {
+      _watchdog = setTimeout(() => {
+        if (!_speechStarted) {
+          try { window.speechSynthesis.cancel(); } catch(e) {}
+          cleanupTimers();
+          unlockAudioButtons();
+          if (onAllDone) onAllDone();
+          _showTtsError('synthesis-failed', lang, voiceName, false);
+        }
+      }, 8000);
+    }
   }
   speakNext();
 }
+
 
 // ==========================================
 // DIAGNOSTIK AUDIO — papar status TTS & senarai bahasa tersedia
@@ -884,6 +893,62 @@ function diagnoseAudio() {
   });
 }
 window.diagnoseAudio = diagnoseAudio;
+
+// ==========================================
+// PULIHKAN AUDIO — reset enjin TTS apabila tersekat / tak stabil
+// ==========================================
+function restoreAudio() {
+  try { window.speechSynthesis.cancel(); } catch(e) {}
+  try { window.speechSynthesis.resume(); } catch(e) {}
+  unlockAudioButtons();
+  // Reload senarai suara
+  try { window.speechSynthesis.getVoices(); } catch(e) {}
+  // Prime dengan utterance senyap pendek dalam user gesture
+  try {
+    const prime = new SpeechSynthesisUtterance(' ');
+    prime.volume = 0; prime.rate = 1; prime.pitch = 1;
+    window.speechSynthesis.speak(prime);
+  } catch(e) {}
+  // Re-init audio context untuk SFX
+  try { initAudio(); } catch(e) {}
+  Swal.fire({
+    toast: true, position: 'top', icon: 'success',
+    title: '🔁 Audio dipulihkan',
+    timer: 1800, showConfirmButton: false
+  });
+}
+window.restoreAudio = restoreAudio;
+
+// ==========================================
+// MENU TETAPAN ⚙️ — pintasan ke Bahasa / Diagnos / Pulihkan Audio
+// ==========================================
+function openSettingsMenu() {
+  Swal.fire({
+    title: '⚙️ Tetapan',
+    html: `
+      <div class="flex flex-col gap-3 text-left">
+        <button id="set-lang" class="bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-3 px-4 rounded-2xl flex items-center gap-3">
+          🌍 <span>Tukar Bahasa Sasaran</span>
+        </button>
+        <button id="set-diag" class="bg-cyan-500 hover:bg-cyan-400 text-white font-bold py-3 px-4 rounded-2xl flex items-center gap-3">
+          🩺 <span>Diagnos Audio</span>
+        </button>
+        <button id="set-restore" class="bg-amber-500 hover:bg-amber-400 text-white font-bold py-3 px-4 rounded-2xl flex items-center gap-3">
+          🔁 <span>Pulihkan Audio</span>
+        </button>
+      </div>
+      <p class="text-xs text-gray-400 mt-3">Audio dibaca perkataan satu-satu pada kelajuan yang admin tetapkan.</p>
+    `,
+    showConfirmButton: false,
+    showCloseButton: true,
+    didOpen: () => {
+      document.getElementById('set-lang').onclick    = () => { Swal.close(); toggleScreen('screen-language'); };
+      document.getElementById('set-diag').onclick    = () => { Swal.close(); diagnoseAudio(); };
+      document.getElementById('set-restore').onclick = () => { Swal.close(); restoreAudio(); };
+    }
+  });
+}
+window.openSettingsMenu = openSettingsMenu;
 
 
 function playCurrentQuestion() {
@@ -1022,7 +1087,7 @@ function initEventListeners() {
     else Swal.fire('-', t('err_name'), 'warning');
   });
 
-  document.getElementById('btn-settings').addEventListener('click', () => toggleScreen('screen-language'));
+  document.getElementById('btn-settings').addEventListener('click', openSettingsMenu);
 
   document.getElementById('btn-logout').addEventListener('click', () => {
     Swal.fire({
@@ -1048,7 +1113,7 @@ function initEventListeners() {
   document.getElementById('btn-skip-question').addEventListener('click', goNextQuestion);
   document.getElementById('btn-play-question').addEventListener('click', playCurrentQuestion);
   document.getElementById('btn-play-target').addEventListener('click', playTargetSentence);
-  const _diag = document.getElementById('btn-diagnose-audio'); if (_diag) _diag.addEventListener('click', diagnoseAudio);
+  // (btn-diagnose-audio dibuang dari skrin permainan — kini dalam menu ⚙️ Tetapan)
 
   document.getElementById('btn-generate-more').addEventListener('click', () => fetchQuestionBatch(gameState.currentLevel, true));
   document.getElementById('btn-back-levels').addEventListener('click', () => toggleScreen('screen-levels'));
