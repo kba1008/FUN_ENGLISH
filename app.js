@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwTwq0rS11bHQxgurboeiTKltq6DtC7ldcxBeDz2oGLymt9D331FasPiGUNO8wMUtoh/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -467,24 +467,12 @@ let gameState = {
 let syncQueue = JSON.parse(localStorage.getItem('kacakata_sync_queue')) || [];
 let audioCtx;
 let answerSortable = null;
-let _ttsUnlocked = false;
 
 function initAudio() {
-  // 1. Unlock Web Audio API
+  // Unlock Web Audio API sahaja (untuk SFX beep)
+  // TTS TIDAK perlukan unlock khas — button click IS user gesture
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
-
-  // 2. Unlock TTS — iOS WAJIB dipanggil dalam user gesture
-  //    volume MESTI > 0 (iOS abaikan volume=0 untuk tujuan unlock)
-  //    JANGAN cancel() sebelum ini — biarkan ia selesai sendiri (ultra pantas)
-  if ('speechSynthesis' in window && !_ttsUnlocked) {
-    _ttsUnlocked = true;
-    const u = new SpeechSynthesisUtterance('\u00A0'); // non-breaking space
-    u.volume = 0.01;
-    u.rate   = 10;
-    u.pitch  = 1;
-    window.speechSynthesis.speak(u);
-  }
 }
 
 // ==========================================
@@ -575,44 +563,163 @@ function pickVoice(langCode) {
 // AUDIO BUTTONS LOCK/UNLOCK
 // ==========================================
 const audioButtons = new Set();
+const _btnOrigText = new Map();
+
 function lockAudioButtons() {
   ['btn-play-question', 'btn-play-target'].forEach(id => {
     const b = document.getElementById(id);
-    if (b) { b.disabled = true; b.classList.add('audio-playing'); audioButtons.add(b); }
+    if (!b) return;
+    // Simpan teks asal
+    if (!_btnOrigText.has(id)) {
+      const span = b.querySelector('span');
+      _btnOrigText.set(id, span ? span.innerHTML : b.innerHTML);
+    }
+    b.disabled = true;
+    b.classList.add('audio-playing');
+    // Tukar icon kepada speaker bergetar
+    const icon = b.querySelector('i');
+    if (icon) {
+      icon.setAttribute('data-lucide', 'volume-2');
+      lucide.createIcons({ nodes: [icon] });
+    }
+    audioButtons.add(b);
   });
 }
+
 function unlockAudioButtons() {
-  audioButtons.forEach(b => { b.disabled = false; b.classList.remove('audio-playing'); });
+  audioButtons.forEach(b => {
+    b.disabled = false;
+    b.classList.remove('audio-playing');
+    // Pulihkan teks asal
+    const id = b.id;
+    const origIcon = id === 'btn-play-question' ? 'volume-2' : 'headphones';
+    const icon = b.querySelector('i');
+    if (icon) {
+      icon.setAttribute('data-lucide', origIcon);
+      lucide.createIcons({ nodes: [icon] });
+    }
+  });
   audioButtons.clear();
 }
 
 // ==========================================
+// PENGURUSAN RALAT AUDIO — mesej berguna mengikut jenis ralat
+// ==========================================
+const TTS_ERROR_INFO = {
+  'not-allowed':           { ms: 'Audio tidak dibenarkan oleh browser.',           fix: 'Muat semula halaman, kemudian tekan butang audio sebagai tindakan PERTAMA anda.' },
+  'interrupted':           { ms: 'Audio terganggu di tengah jalan.',               fix: 'Tekan butang audio sekali lagi.' },
+  'canceled':              { ms: 'Audio dibatalkan oleh sistem.',                   fix: 'Tekan butang audio sekali lagi.' },
+  'synthesis-unavailable': { ms: 'Enjin TTS tidak wujud pada peranti ini.',         fix: 'Buka Tetapan → Kebolehcapaian → Text-to-Speech → aktifkan Google TTS / Samsung TTS.' },
+  'synthesis-failed':      { ms: 'Enjin TTS gagal membina audio.',                 fix: 'Cuba tukar bahasa sasaran atau restart browser.' },
+  'language-unavailable':  { ms: 'Bahasa ini tidak dipasang pada peranti anda.',   fix: 'Tetapan → Kebolehcapaian → TTS → Muat Turun Data Bahasa.' },
+  'voice-unavailable':     { ms: 'Tiada suara untuk bahasa ini ditemui.',           fix: 'Pasang data bahasa tambahan dalam Tetapan → TTS.' },
+  'text-too-long':         { ms: 'Teks terlalu panjang untuk TTS.',                fix: 'Aktifkan mod "Word Pause" dalam Tetapan Admin.' },
+  'invalid-argument':      { ms: 'Parameter TTS tidak sah (ralat dalaman).',        fix: 'Muat semula halaman dan cuba semula.' },
+  'network':               { ms: 'Ralat rangkaian ketika memuat audio.',            fix: 'Semak sambungan internet anda.' },
+};
+
+function _showTtsError(errorCode, langCode, voiceName, speechStarted) {
+  const info = TTS_ERROR_INFO[errorCode] || {
+    ms:  `Ralat tidak diketahui: "${errorCode || 'tiada kod'}"`,
+    fix: 'Cuba muat semula halaman atau guna browser lain (Chrome/Safari).'
+  };
+
+  const allVoices = window.speechSynthesis ? (window.speechSynthesis.getVoices() || []) : [];
+  const ua = navigator.userAgent;
+  const browserShort = /iPhone|iPad|iPod/.test(ua) ? 'iOS Safari'
+    : /Samsung/.test(ua) ? 'Samsung Internet'
+    : /Chrome/.test(ua) ? 'Chrome'
+    : /Firefox/.test(ua) ? 'Firefox'
+    : 'Browser tidak dikenal';
+
+  const debugLines = [
+    `🔴 Jenis ralat: <b>${errorCode || '(tiada)'}</b>`,
+    `🌐 Bahasa diminta: <b>${langCode}</b>`,
+    `🎙 Suara digunakan: <b>${voiceName || '(pilih auto)'}</b>`,
+    `📱 Browser: <b>${browserShort}</b>`,
+    `🗣 Bilangan suara tersedia: <b>${allVoices.length}</b>`,
+    `▶️ Audio sempat bermula: <b>${speechStarted ? 'Ya' : 'Tidak — gagal sebelum bermula'}</b>`,
+  ].join('<br>');
+
+  Swal.fire({
+    icon: 'error',
+    title: '🔇 Audio Gagal',
+    html: `
+      <div class="text-left text-sm space-y-3">
+        <p class="font-bold text-red-600 text-base">${info.ms}</p>
+        <div class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-3">
+          <p class="font-bold text-amber-700 mb-1">💡 Penyelesaian:</p>
+          <p class="text-gray-700">${info.fix}</p>
+        </div>
+        <details class="bg-gray-50 border-2 border-gray-200 rounded-2xl p-3 cursor-pointer">
+          <summary class="font-bold text-gray-500 text-xs">🔧 Info Diagnostik (untuk laporan ralat)</summary>
+          <div class="mt-2 text-xs text-gray-600 leading-relaxed">${debugLines}</div>
+        </details>
+      </div>`,
+    confirmButtonColor: '#ec4899',
+    confirmButtonText: 'OK, Faham',
+    showCancelButton: true,
+    cancelButtonText: '📋 Salin Info',
+    cancelButtonColor: '#6b7280',
+  }).then(r => {
+    if (r.dismiss === Swal.DismissReason.cancel) {
+      const plain = [
+        `Ralat: ${errorCode || 'tiada'}`,
+        `Bahasa: ${langCode}`,
+        `Suara: ${voiceName || 'auto'}`,
+        `Browser: ${browserShort}`,
+        `Bilangan suara: ${allVoices.length}`,
+        `Sempat bermula: ${speechStarted ? 'Ya' : 'Tidak'}`,
+        `UA: ${ua}`,
+      ].join('\n');
+      navigator.clipboard.writeText(plain).catch(() => {});
+      Swal.fire({ toast: true, icon: 'success', title: 'Disalin!', timer: 1500, showConfirmButton: false, position: 'top' });
+    }
+  });
+}
+
+// ==========================================
 // speakText — synchronous, iOS + Android safe
+// Dipanggil DARI button click (user gesture) — speak() terus, tiada unlock perantara
 // ==========================================
 function speakText(text, langCode, onAllDone) {
+  // 1. Semak sokongan TTS
   if (!('speechSynthesis' in window)) {
+    Swal.fire({
+      icon: 'warning', title: '🔇 TTS Tidak Disokong',
+      html: '<p>Browser anda tidak menyokong Text-to-Speech.</p><p class="mt-2 text-sm text-gray-500">Sila guna <b>Chrome</b> atau <b>Safari</b> terkini.</p>',
+      confirmButtonColor: '#ec4899'
+    });
     if (onAllDone) onAllDone();
     return;
   }
-  if (!text || !String(text).trim()) { if (onAllDone) onAllDone(); return; }
 
-  // Backup: unlock TTS sekiranya user belum sentuh skrin
-  if (!_ttsUnlocked) initAudio();
+  const str = String(text || '').trim();
+  if (!str) { if (onAllDone) onAllDone(); return; }
 
-  // Cancel HANYA jika sedang bercakap — elak ganggu unlock utterance
-  if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-    window.speechSynthesis.cancel();
-  }
+  // Selalu cancel dahulu — selamat kerana kita dalam user gesture (button click)
+  // PENTING: Jangan letak SEBARANG await/setTimeout sebelum speak() — akan buang gesture context
+  window.speechSynthesis.cancel();
 
   const voice = pickVoice(langCode || 'en-US');
   const lang  = voice ? voice.lang : (langCode || 'en-US');
+  const rate  = (adminSettings.audioRate  > 0) ? adminSettings.audioRate  : 0.95;
+  const pitch = (adminSettings.audioPitch > 0) ? adminSettings.audioPitch : 1.0;
+  const voiceName = voice ? (voice.name || voice.lang) : null;
+
+  // 2. Amaran jika tiada suara langsung (mungkin belum dimuatkan)
+  const allVoices = window.speechSynthesis.getVoices() || [];
+  if (allVoices.length === 0) {
+    console.warn('[TTS] Tiada suara dimuatkan lagi — cuba dengan utter.lang sahaja');
+  }
 
   const words = adminSettings.audioWordPause
-    ? String(text).trim().split(/\s+/).filter(Boolean)
-    : [String(text)];
+    ? str.split(/\s+/).filter(Boolean)
+    : [str];
 
   let idx = 0;
   let _watchdog;
+  let _speechStarted = false;   // jejak sama ada audio sempat bermula
 
   function speakNext() {
     clearTimeout(_watchdog);
@@ -624,18 +731,35 @@ function speakText(text, langCode, onAllDone) {
     const utter = new SpeechSynthesisUtterance(words[idx++]);
     if (voice) utter.voice = voice;
     utter.lang   = lang;
-    utter.rate   = adminSettings.audioRate;
-    utter.pitch  = adminSettings.audioPitch;
+    utter.rate   = rate;
+    utter.pitch  = pitch;
     utter.volume = 1;
-    utter.onend  = speakNext;
-    utter.onerror = () => { clearTimeout(_watchdog); unlockAudioButtons(); if (onAllDone) onAllDone(); };
+
+    utter.onstart = () => { _speechStarted = true; };
+    utter.onend   = speakNext;
+    utter.onerror = (e) => {
+      clearTimeout(_watchdog);
+      unlockAudioButtons();
+      if (onAllDone) onAllDone();
+      // Abaikan ralat "canceled" — ia dijana secara normal apabila kita cancel()
+      const code = (e && e.error) ? e.error : '';
+      if (code === 'canceled' || code === 'interrupted') return;
+      _showTtsError(code, lang, voiceName, _speechStarted);
+    };
+
     window.speechSynthesis.speak(utter);
-    // Watchdog: iOS kadang-kadang hang tanpa onend — paksa selesai selepas 10s
+
+    // Watchdog: iOS kadang-kadang senyap tanpa onend/onerror
+    // Jika tiada respons dalam 12s, tunjuk ralat "tidak bermula"
     _watchdog = setTimeout(() => {
       window.speechSynthesis.cancel();
       unlockAudioButtons();
       if (onAllDone) onAllDone();
-    }, 10000);
+      if (!_speechStarted) {
+        // TTS tidak pernah bermula — tunjuk ralat diagnostik
+        _showTtsError('synthesis-failed', lang, voiceName, false);
+      }
+    }, 12000);
   }
   speakNext();
 }
@@ -800,9 +924,9 @@ function initEventListeners() {
     if (appTitleTapCount >= 5) { appTitleTapCount = 0; openAdminLogin(); }
   });
 
-  // touchstart fires BEFORE click on mobile — unlock TTS seawal mungkin
+  // Unlock Web Audio API (untuk SFX beep) pada interaksi pertama
   document.body.addEventListener('touchstart', initAudio, { once: true, passive: true });
-  document.body.addEventListener('click',      initAudio, { once: true });
+  document.body.addEventListener('click',      initAudio, { once: true, passive: true });
 }
 let appTitleTapCount = 0, appTitleTapTimer;
 

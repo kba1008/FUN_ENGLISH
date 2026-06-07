@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kacakata-v11-i18n';
+const CACHE_NAME = 'kacakata-v15-audio';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

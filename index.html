@@ -79,11 +79,16 @@
     .sortable-chosen { transform: scale(1.08) rotate(-2deg); }
     .sortable-drag { transform: rotate(3deg); }
 
-    @keyframes pulseAudio {
-      0%, 100% { box-shadow: 0 4px 6px rgba(6,182,212,0.4); }
-      50% { box-shadow: 0 4px 20px rgba(6,182,212,0.9); }
+    @keyframes blinkAudio {
+      0%   { opacity: 1;   transform: scale(1);    box-shadow: 0 0 0 0 rgba(6,182,212,0.7); }
+      40%  { opacity: 0.4; transform: scale(0.96); box-shadow: 0 0 0 10px rgba(6,182,212,0); }
+      60%  { opacity: 1;   transform: scale(1.04); box-shadow: 0 0 0 0 rgba(6,182,212,0.5); }
+      100% { opacity: 1;   transform: scale(1);    box-shadow: 0 0 0 0 rgba(6,182,212,0); }
     }
-    .audio-playing { animation: pulseAudio 0.8s ease-in-out infinite; }
+    .audio-playing {
+      animation: blinkAudio 0.6s ease-in-out infinite !important;
+      cursor: not-allowed;
+    }
 
     ::-webkit-scrollbar { width: 10px; }
     ::-webkit-scrollbar-track { background: rgba(255,255,255,0.5); border-radius: 10px; }
