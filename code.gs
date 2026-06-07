@@ -211,25 +211,31 @@ function pickKey(obj, candidates) {
   return undefined;
 }
 function normalizeWord(w) {
-  if (typeof w === 'string') return { word: w, pron: w };
+  if (typeof w === 'string' && w.trim()) return { word: w.trim(), pron: w.trim() };
   if (!w || typeof w !== 'object') return null;
   const word = pickKey(w, ['word', 'text', 'token', 'perkataan', 'kata']);
   const pron = pickKey(w, ['pron', 'pronunciation', 'sebutan', 'phonetic', 'phonetics', 'ipa', 'romaji']);
-  if (!word) return null;
-  return { word: String(word), pron: String(pron || word) };
+  const wordStr = word ? String(word).trim() : '';
+  const pronStr = pron ? String(pron).trim() : '';
+  // Jika 'word' kosong tapi 'pron' ada — guna 'pron' sebagai 'word'
+  // (berlaku bila AI masukkan aksara bukan-rumi dalam pron sahaja)
+  if (!wordStr && !pronStr) return null;
+  const finalWord = wordStr || pronStr;
+  const finalPron = pronStr || wordStr;
+  return { word: finalWord, pron: finalPron };
 }
 function normalizeQuestion(q) {
   if (!q || typeof q !== 'object') return null;
   const source = pickKey(q, ['source','malay','melayu','bm','bahasa_melayu','source_sentence','mother','ibunda','question','asal']);
   const target = pickKey(q, ['target_sentence','target','translation','english','sentence','ayat','terjemahan','jawapan','target_text']);
   let wordsRaw = pickKey(q, ['words','word_list','tokens','perkataan','kata','word_data','translation_words']);
-  if (!source || !target) return null;
+  if (!source || !target || !String(source).trim() || !String(target).trim()) return null;
   if (!Array.isArray(wordsRaw)) {
     wordsRaw = String(target).split(/\s+/).filter(Boolean).map(w => ({ word: w, pron: w }));
   }
   const words = wordsRaw.map(normalizeWord).filter(Boolean);
   if (words.length === 0) return null;
-  return { source: String(source), target_sentence: String(target), words: words };
+  return { source: String(source).trim(), target_sentence: String(target).trim(), words: words };
 }
 function deepCollectQuestions(node, out) {
   if (!node) return;
@@ -327,34 +333,49 @@ function handleGetBatchQuestions(payload) {
   else if (level == 2) difficulty = 'sederhana (4-7 patah perkataan), ayat harian biasa.';
   else difficulty = 'kompleks (7-10 patah perkataan), ayat majmuk yang masih natural.';
 
+  const isNonLatin = /mandarin|arab|jepun|korea|thai|hindi|tamil|rusia|chinese|japanese|korean|arabic|russian/i.test(language);
+  const nonLatinExample = isNonLatin ? `
+CONTOH WAJIB untuk bahasa bukan rumi — IKUT FORMAT INI TEPAT-TEPAT:
+Jika language = "Bahasa Mandarin":
+  target_sentence MESTI mengandungi aksara Cina: "我喜欢吃苹果"
+  words MESTI: [{"word":"我","pron":"wǒ"},{"word":"喜欢","pron":"xǐhuān"},{"word":"吃","pron":"chī"},{"word":"苹果","pron":"píngguǒ"}]
+  JANGAN biarkan "word" kosong! MESTI ada aksara sebenar.
+Jika language = "Bahasa Arab":
+  target_sentence: "أنا أحب التفاح"
+  words: [{"word":"أنا","pron":"ana"},{"word":"أحب","pron":"uhibbu"},{"word":"التفاح","pron":"al-tuffah"}]
+Jika language = "Bahasa Jepun":
+  target_sentence: "私はりんごが好きです"
+  words: [{"word":"私は","pron":"watashi wa"},{"word":"りんごが","pron":"ringo ga"},{"word":"好きです","pron":"suki desu"}]
+` : '';
+
   const buildPrompt = (strictMode) => `Anda adalah CIKGU BAHASA pakar. Tugas: bina 15 pasangan ayat terjemahan untuk pelajar.
 
 BAHASA SUMBER (bahasa ibunda pelajar): ${motherTongue}
 BAHASA SASARAN (yang ingin dipelajari): ${language}
 TAHAP: ${difficulty}
-
+${nonLatinExample}
 WAJIB PATUH:
 1. Setiap ayat dalam ${motherTongue} MESTI menggunakan TATABAHASA & EJAAN yang BETUL 100%.
 2. Setiap terjemahan dalam ${language} MESTI gramatis, natural, dan benar dari segi struktur ayat penutur jati. JANGAN terjemah secara harfiah perkataan demi perkataan.
 3. Kekalkan makna yang sama antara kedua-dua ayat.
 4. Gunakan kosa kata harian yang sesuai dengan tahap pelajar.
-5. Untuk bahasa bukan rumi (Arab/Mandarin/Jepun/Korea/Thai/Hindi/Tamil/Rusia), kekalkan tulisan asli dalam "word" dan beri "pron" dalam rumi yang mudah disebut.
-6. "words" mesti pecahan TEPAT bagi "target_sentence" mengikut urutan asal.
+5. Untuk bahasa bukan rumi (Arab/Mandarin/Jepun/Korea/Thai/Hindi/Tamil/Rusia): field "word" MESTI MENGANDUNGI AKSARA ASLI (bukan kosong!), field "pron" berikan sebutan rumi mudah.
+6. "words" mesti pecahan TEPAT bagi "target_sentence" mengikut urutan asal. Gabungkan word dalam target_sentence apabila disusun mengikut turutan dalam "words" mesti membentuk semula "target_sentence" yang tepat.
 
-OUTPUT JSON SAHAJA (tiada teks lain) dengan struktur INI TEPAT:
+OUTPUT JSON SAHAJA (tiada teks lain, tiada markdown) dengan struktur INI TEPAT:
 {
   "questions": [
     {
       "source": "<ayat dalam ${motherTongue}>",
       "target_sentence": "<terjemahan natural & gramatis dalam ${language}>",
       "words": [
-        {"word": "<perkataan dalam ${language}>", "pron": "<sebutan rumi mudah>"}
+        {"word": "<perkataan ASLI dalam ${language} — JANGAN kosong>", "pron": "<sebutan rumi mudah>"}
       ]
     }
   ]
 }
 
-Kekunci JSON WAJIB${strictMode ? ' (PERCUBAAN AKHIR)' : ''}: "questions", "source", "target_sentence", "words", "word", "pron". Semua huruf kecil. JANGAN ubah nama kekunci. JANGAN guna markdown.`;
+Kekunci JSON WAJIB${strictMode ? ' (PERCUBAAN AKHIR — WAJIB ISI "word" dengan aksara sebenar)' : ''}: "questions", "source", "target_sentence", "words", "word", "pron". Semua huruf kecil. JANGAN ubah nama kekunci. JANGAN guna markdown.`;
 
   let parsedData = [];
   let lastError = '';

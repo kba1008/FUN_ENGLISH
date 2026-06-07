@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxftOHxKug6EkWYkY1jZVx4EFQjKEu2o4gInfyg9XnEmRkrsQmbuyPNmd3wqvs674FD/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -467,10 +467,21 @@ let gameState = {
 let syncQueue = JSON.parse(localStorage.getItem('kacakata_sync_queue')) || [];
 let audioCtx;
 let answerSortable = null;
+let _ttsUnlocked = false;
 
 function initAudio() {
+  // Unlock AudioContext
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  // Unlock TTS untuk iOS — MESTI dipanggil dalam user gesture
+  if ('speechSynthesis' in window && !_ttsUnlocked) {
+    _ttsUnlocked = true;
+    const u = new SpeechSynthesisUtterance('');
+    u.volume = 0;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  }
 }
 
 // ==========================================
@@ -601,7 +612,7 @@ function unlockAudioButtons() {
   audioButtons.clear();
 }
 
-async function speakText(text, langCode, onAllDone) {
+function speakText(text, langCode, onAllDone) {
   if (!('speechSynthesis' in window)) {
     Swal.fire('-', 'Browser tidak menyokong audio.', 'warning');
     if (onAllDone) onAllDone();
@@ -609,35 +620,36 @@ async function speakText(text, langCode, onAllDone) {
   }
   if (!text) { if (onAllDone) onAllDone(); return; }
 
+  // Unlock TTS sekiranya belum (backup — sepatutnya sudah unlock masa initAudio)
+  if (!_ttsUnlocked) { initAudio(); }
+
   window.speechSynthesis.cancel();
 
-  // iOS fix: delay kecil selepas cancel() — tanpa ini iOS akan senyap sahaja
-  await new Promise(r => setTimeout(r, 120));
-
-  // Tunggu senarai suara dimuatkan (penting untuk mobile)
-  const voices = await getVoicesAsync();
-  const voice = pickVoice(voices, langCode || 'en-US');
-  const lang = voice ? voice.lang : (langCode || 'en-US');
+  // Guna cached voices (sudah dimuatkan oleh onvoiceschanged)
+  const voice = pickVoice(_cachedVoices, langCode || 'en-US');
+  const lang  = voice ? voice.lang : (langCode || 'en-US');
 
   // Word-by-word HANYA jika admin enable secara eksplisit
   const words = adminSettings.audioWordPause
     ? String(text).trim().split(/\s+/).filter(Boolean)
     : [String(text)];
 
-  let pending = words.length;
-  const done = () => { if (--pending <= 0) { unlockAudioButtons(); if (onAllDone) onAllDone(); } };
-
-  words.forEach((w) => {
-    const utter = new SpeechSynthesisUtterance(w);
+  // Bina semua utterance dahulu, baru speak satu-per-satu berantai
+  // (lebih stabil pada iOS berbanding forEach speak sekaligus)
+  let idx = 0;
+  function speakNext() {
+    if (idx >= words.length) { unlockAudioButtons(); if (onAllDone) onAllDone(); return; }
+    const utter = new SpeechSynthesisUtterance(words[idx++]);
     if (voice) utter.voice = voice;
-    utter.lang = lang;
-    utter.rate = adminSettings.audioRate;
-    utter.pitch = adminSettings.audioPitch;
+    utter.lang   = lang;
+    utter.rate   = adminSettings.audioRate;
+    utter.pitch  = adminSettings.audioPitch;
     utter.volume = 1;
-    utter.onend = done;
-    utter.onerror = done;
+    utter.onend  = speakNext;
+    utter.onerror = () => { unlockAudioButtons(); if (onAllDone) onAllDone(); };
     window.speechSynthesis.speak(utter);
-  });
+  }
+  speakNext();
 }
 
 function playCurrentQuestion() {
