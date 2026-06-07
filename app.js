@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxuSBUyw9uV-CSB8ZK4l-EdpgtK3VoyxIOiL3oHhREVQ1EwVdaCpJKaGTPHJ94XDbGE/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyF8HSX6qOJ-c7LwTwaTGjB8J_KDaTNMyk3SUvzdF_qbrrmX-NubYbarg9QkLt24BH8/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -697,22 +697,11 @@ function speakText(text, langCode, onAllDone) {
   const str = String(text || '').trim();
   if (!str) { if (onAllDone) onAllDone(); return; }
 
-  // Tunggu voices dimuatkan (Chrome async): cuba sehingga 1.5s
-  const startSpeak = () => _speakNow(str, langCode, onAllDone);
-  const have = (window.speechSynthesis.getVoices() || []).length;
-  if (have === 0) {
-    let attempts = 0;
-    const poll = setInterval(() => {
-      attempts++;
-      const v = window.speechSynthesis.getVoices() || [];
-      if (v.length || attempts > 15) {
-        clearInterval(poll);
-        startSpeak();
-      }
-    }, 100);
-  } else {
-    startSpeak();
-  }
+  // PENTING (iOS/Android): MESTI panggil speak() SERTA-MERTA dalam user gesture.
+  // Jangan polling dahulu — gesture akan hilang dan audio jadi senyap.
+  // Trigger getVoices() untuk warm-up enjin (tak menunggu).
+  try { window.speechSynthesis.getVoices(); } catch(e) {}
+  _speakNow(str, langCode, onAllDone);
 }
 
 // Cari voice yang BENAR-BENAR padan dengan langCode (bukan fallback ke voice default)
@@ -738,19 +727,13 @@ function _speakNow(str, langCode, onAllDone) {
 
   const match = _matchVoiceForLang(langCode || 'en-US');
   const voice = match.voice;
+  // PENTING: walaupun tiada voice padan, JANGAN tolak.
+  // Android Chrome selalunya getVoices()=[] tetapi enjin TTS sokong bahasa via utter.lang.
+  // Biar enjin OS cuba; jika benar-benar gagal, onerror akan trigger _showTtsError.
   const lang  = voice ? voice.lang : (langCode || 'en-US');
   const rate  = (adminSettings.audioRate  > 0) ? adminSettings.audioRate  : 0.95;
   const pitch = (adminSettings.audioPitch > 0) ? adminSettings.audioPitch : 1.0;
-  const voiceName = voice ? (voice.name || voice.lang) : null;
-
-  // PROAKTIF: jika tiada voice padan untuk bahasa ini, jangan biar senyap — papar ralat segera
-  if (!match.matched) {
-    unlockAudioButtons();
-    if (onAllDone) onAllDone();
-    const code = match.reason === 'no-voices' ? 'synthesis-unavailable' : 'language-unavailable';
-    _showTtsError(code, langCode || '?', null, false);
-    return;
-  }
+  const voiceName = voice ? (voice.name || voice.lang) : '(auto/OS engine)';
 
   const words = adminSettings.audioWordPause
     ? str.split(/\s+/).filter(Boolean)
@@ -811,7 +794,7 @@ function _speakNow(str, langCode, onAllDone) {
       return;
     }
 
-    // Watchdog: jika audio tidak bermula dalam 4s, ada masalah enjin
+    // Watchdog: jika audio tidak bermula dalam 8s, ada masalah enjin (Android perlu warm-up lama)
     _watchdog = setTimeout(() => {
       if (!_speechStarted) {
         try { window.speechSynthesis.cancel(); } catch(e) {}
@@ -820,7 +803,7 @@ function _speakNow(str, langCode, onAllDone) {
         if (onAllDone) onAllDone();
         _showTtsError('synthesis-failed', lang, voiceName, false);
       }
-    }, 4000);
+    }, 8000);
   }
   speakNext();
 }
@@ -958,6 +941,20 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
   loadLocalData();
+  // iOS/Android audio unlock: fire silent utterance pada first touch/click
+  // supaya enjin TTS dibuka dalam user gesture context.
+  let _ttsUnlocked = false;
+  const _unlockTTS = () => {
+    if (_ttsUnlocked || !('speechSynthesis' in window)) return;
+    _ttsUnlocked = true;
+    try {
+      const u = new SpeechSynthesisUtterance('');
+      u.volume = 0; u.rate = 1; u.pitch = 1;
+      window.speechSynthesis.speak(u);
+    } catch(e) {}
+  };
+  document.addEventListener('touchstart', _unlockTTS, { once: true, passive: true });
+  document.addEventListener('click',      _unlockTTS, { once: true });
   applyI18n();
   checkNetworkStatus();
 
