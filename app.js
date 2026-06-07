@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwa5o0S82Jk_2SNaKpp6HhnQZLRlkUEKZX29vNFMxDkZLhdPS7gHcu6vco6woyxoC5r/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzOJfzz9lKq2ZMI3ODfoQCAqolBMq61v7JbuoUUs5R-iKQYxvXtwisaM13MxYUjE2ln/exec';
 
 // ==========================================
 // I18N — KAMUS UI MENGIKUT BAHASA IBUNDA
@@ -1456,7 +1456,7 @@ function clearBoard() {
 
 function _normalizeForCompare(s) {
   if (!s) return '';
-  return String(s)
+  let out = String(s)
     .toLowerCase()
     // Buang diakritik Arab (tashkeel) & tatweel
     .replace(/[\u064B-\u0652\u0670\u0640]/g, '')
@@ -1466,10 +1466,16 @@ function _normalizeForCompare(s) {
     .replace(/\u0649/g, '\u064A')
     .replace(/\u0629/g, '\u0647')
     // Buang SEMUA tanda baca (Latin + Arab + CJK biasa)
-    .replace(/[.,!?;:'"()\[\]{}\-–—_/\\،؛؟…。、！？「」『』]/g, '')
+    .replace(/[.,!?;:'"()\[\]{}\-–—_/\\،؛؟…。、！？「」『』·]/g, '')
     // Mampatkan ruang
     .replace(/\s+/g, ' ')
     .trim();
+  // Untuk CJK (China/Jepun/Korea), buang SEMUA ruang kerana
+  // bahasa ini tidak guna ruang antara perkataan.
+  if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uff66-\uff9f]/.test(out)) {
+    out = out.replace(/\s+/g, '');
+  }
+  return out;
 }
 
 function checkAnswer() {
