@@ -1,7 +1,7 @@
 // ==========================================
 // KONFIGURASI BACKEND
 // ==========================================
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzyTdG6B6LmvuhRGe8SyBkRLPteeaSoOTa9wwW49gvb5ywh7VxVFfrcWLiMbwcSHD9q/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycby1HITntRfhJKfs38gOvHbB0MAmgsEQSLX3VhMXKEer28IHHkCfasPdO_JjrLtde77q/exec';
 
 // Tetapan admin (boleh diubah dalam mod admin)
 let adminSettings = JSON.parse(localStorage.getItem('kacakata_admin_settings')) || {
