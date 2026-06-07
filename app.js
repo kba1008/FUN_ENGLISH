@@ -2,7 +2,7 @@
 // KONFIGURASI BACKEND
 // ==========================================
 // ⚠️ GANTIKAN URL DI BAWAH DENGAN URL WEB APP ANDA
-const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxkZ2FLXXtqvih5zIpWUtPW09BoAavCULy-qWbTM3Ygjlk3LN78oB0ZQhplKO6i9oZK/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz655s0Cy7oWbpRsSLHjtjDj-B59tKWFIZdS55njxyJp2qkZuWxQctQYzcb-lxo9Kxk/exec';
 
 // State Permainan
 let gameState = {
@@ -23,6 +23,112 @@ let audioCtx;
 function initAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// ==========================================
+// TEXT-TO-SPEECH (BACA SOALAN)
+// ==========================================
+const LANG_CODE_MAP = {
+  'bahasa inggeris': 'en-US',
+  'english': 'en-US',
+  'bahasa arab': 'ar-SA',
+  'arabic': 'ar-SA',
+  'bahasa mandarin': 'zh-CN',
+  'mandarin': 'zh-CN',
+  'cina': 'zh-CN',
+  'bahasa jepun': 'ja-JP',
+  'japanese': 'ja-JP',
+  'bahasa korea': 'ko-KR',
+  'korean': 'ko-KR',
+  'bahasa perancis': 'fr-FR',
+  'french': 'fr-FR',
+  'bahasa sepanyol': 'es-ES',
+  'spanish': 'es-ES',
+  'bahasa jerman': 'de-DE',
+  'german': 'de-DE',
+  'bahasa itali': 'it-IT',
+  'italian': 'it-IT',
+  'bahasa tamil': 'ta-IN',
+  'tamil': 'ta-IN',
+  'bahasa hindi': 'hi-IN',
+  'hindi': 'hi-IN',
+  'bahasa thai': 'th-TH',
+  'thai': 'th-TH',
+  'bahasa indonesia': 'id-ID',
+  'bahasa melayu': 'ms-MY',
+  'malay': 'ms-MY'
+};
+
+function getTargetLangCode() {
+  const raw = (gameState.targetLanguage || '').toString().trim().toLowerCase();
+  if (LANG_CODE_MAP[raw]) return LANG_CODE_MAP[raw];
+  // cuba padan separa
+  for (const key in LANG_CODE_MAP) {
+    if (raw.includes(key)) return LANG_CODE_MAP[key];
+  }
+  return 'en-US';
+}
+
+function pickVoice(langPrefix) {
+  const voices = window.speechSynthesis.getVoices();
+  const p = langPrefix.toLowerCase();
+  return voices.find(v => v.lang && v.lang.toLowerCase() === p)
+      || voices.find(v => v.lang && v.lang.toLowerCase().startsWith(p.split('-')[0]))
+      || voices.find(v => v.default)
+      || voices[0];
+}
+
+function speakText(text, langPrefix) {
+  if (!('speechSynthesis' in window)) {
+    Swal.fire('Maaf', 'Pelayar anda tidak menyokong audio bacaan.', 'warning');
+    return;
+  }
+  if (!text) return;
+  window.speechSynthesis.cancel();
+
+  const voice = pickVoice(langPrefix || 'ms');
+  const lang = voice ? voice.lang : (langPrefix && langPrefix.includes('-') ? langPrefix : (langPrefix === 'en' ? 'en-US' : 'ms-MY'));
+
+  // Mod mesra OKU: pecah ayat kepada perkataan, sebut satu-satu dengan jeda.
+  const words = String(text).trim().split(/\s+/).filter(Boolean);
+
+  words.forEach((w, i) => {
+    const utter = new SpeechSynthesisUtterance(w);
+    if (voice) utter.voice = voice;
+    utter.lang = lang;
+    utter.rate = 0.6;   // perlahan & jelas
+    utter.pitch = 1;
+    utter.volume = 1;
+    // jeda antara perkataan dgn ayat kosong pendek selepas setiap perkataan
+    window.speechSynthesis.speak(utter);
+    if (i < words.length - 1) {
+      const pause = new SpeechSynthesisUtterance(' , ');
+      if (voice) pause.voice = voice;
+      pause.lang = lang;
+      pause.rate = 0.6;
+      pause.volume = 0;
+      window.speechSynthesis.speak(pause);
+    }
+  });
+}
+
+// Pastikan senarai suara siap (sesetengah pelayar lazy-load)
+if ('speechSynthesis' in window) {
+  window.speechSynthesis.onvoiceschanged = () => {};
+}
+
+function playCurrentQuestion() {
+  const text = (gameState.currentMalay || document.getElementById('malay-sentence').textContent || '').trim();
+  speakText(text, 'ms');
+}
+
+function playTargetSentence() {
+  const text = (gameState.targetSentence || '').trim();
+  if (!text) {
+    Swal.fire('Belum sedia', 'Soalan belum dimuatkan.', 'info');
+    return;
+  }
+  speakText(text, getTargetLangCode());
 }
 
 // ==========================================
@@ -187,6 +293,12 @@ function initEventListeners() {
 
   document.getElementById('btn-check').addEventListener('click', checkAnswer);
   document.getElementById('btn-clear').addEventListener('click', clearBoard);
+
+  const btnPlay = document.getElementById('btn-play-question');
+  if (btnPlay) btnPlay.addEventListener('click', playCurrentQuestion);
+
+  const btnPlayTarget = document.getElementById('btn-play-target');
+  if (btnPlayTarget) btnPlayTarget.addEventListener('click', playTargetSentence);
   
   document.getElementById('btn-generate-more').addEventListener('click', () => {
     fetchQuestionBatch(gameState.currentLevel, true);
@@ -271,7 +383,26 @@ async function startGameSetup() {
     const data = await response.json();
 
     if (data.status === 'exists') {
-      Swal.fire('Oops', data.message, 'error');
+      const savedScore = parseInt(data.score) || 0;
+      const confirm = await Swal.fire({
+        title: `Selamat kembali, ${name}! 👋`,
+        html: `Nama ini telah berdaftar dengan markah <b>${savedScore}</b>.<br>Sambung semula latihan kamu?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#ec4899',
+        cancelButtonColor: '#9ca3af',
+        confirmButtonText: 'Ya, Sambung',
+        cancelButtonText: 'Guna Nama Lain'
+      });
+      if (confirm.isConfirmed) {
+        gameState.name = name;
+        gameState.score = savedScore;
+        localStorage.setItem('kacakata_name', name);
+        localStorage.setItem('kacakata_score', savedScore);
+        document.getElementById('display-name').textContent = name;
+        document.getElementById('display-score').textContent = savedScore;
+        toggleScreen('screen-language');
+      }
     } else {
       Swal.close();
       gameState.name = name;
