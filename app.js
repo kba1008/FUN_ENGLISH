@@ -524,16 +524,63 @@ const VOICE_FALLBACK = {
   'en-US': ['en-US', 'en-GB', 'en-AU', 'en']
 };
 
-function pickVoice(langCode) {
-  const voices = window.speechSynthesis.getVoices() || [];
-  if (!voices.length) return null;
+// ==========================================
+// VOICE LOADING — mobile-safe
+// ==========================================
+let _cachedVoices = [];
+let _voicesReady = false;
+let _voicesReadyCallbacks = [];
+
+function _onVoicesLoaded(voices) {
+  _cachedVoices = voices || [];
+  _voicesReady = true;
+  _voicesReadyCallbacks.forEach(cb => cb(_cachedVoices));
+  _voicesReadyCallbacks = [];
+}
+
+if ('speechSynthesis' in window) {
+  // Set up onvoiceschanged SEBELUM panggil getVoices()
+  window.speechSynthesis.onvoiceschanged = () => {
+    const v = window.speechSynthesis.getVoices() || [];
+    if (v.length > 0) _onVoicesLoaded(v);
+  };
+  // Cuba muatkan terus (works on desktop & some Android)
+  try {
+    const v = window.speechSynthesis.getVoices() || [];
+    if (v.length > 0) _onVoicesLoaded(v);
+  } catch(e) {}
+}
+
+// Pulangkan Promise<voices[]> — tunggu sehingga senarai tersedia
+function getVoicesAsync() {
+  return new Promise(resolve => {
+    if (_voicesReady && _cachedVoices.length > 0) {
+      resolve(_cachedVoices);
+      return;
+    }
+    // Daftar callback, timeout 3s sebagai fallback
+    const tid = setTimeout(() => {
+      resolve(_cachedVoices); // mungkin masih kosong tapi jangan block
+    }, 3000);
+    _voicesReadyCallbacks.push((voices) => {
+      clearTimeout(tid);
+      resolve(voices);
+    });
+    // Cuba sekali lagi — Android kadang-kadang perlukan rangsangan kedua
+    try {
+      const v = window.speechSynthesis.getVoices() || [];
+      if (v.length > 0) { clearTimeout(tid); _onVoicesLoaded(v); }
+    } catch(e) {}
+  });
+}
+
+function pickVoice(voices, langCode) {
+  if (!voices || !voices.length) return null;
   const chain = VOICE_FALLBACK[langCode] || [langCode, langCode.split('-')[0]];
   for (const tag of chain) {
     const tagLower = tag.toLowerCase();
-    // exact match
     let v = voices.find(v => v.lang && v.lang.toLowerCase() === tagLower);
     if (v) return v;
-    // prefix match (e.g. "ms" matches "ms-MY")
     v = voices.find(v => v.lang && v.lang.toLowerCase().startsWith(tagLower + '-'));
     if (v) return v;
     v = voices.find(v => v.lang && v.lang.toLowerCase() === tagLower.split('-')[0]);
@@ -554,16 +601,22 @@ function unlockAudioButtons() {
   audioButtons.clear();
 }
 
-function speakText(text, langCode, onAllDone) {
+async function speakText(text, langCode, onAllDone) {
   if (!('speechSynthesis' in window)) {
     Swal.fire('-', 'Browser tidak menyokong audio.', 'warning');
     if (onAllDone) onAllDone();
     return;
   }
   if (!text) { if (onAllDone) onAllDone(); return; }
+
   window.speechSynthesis.cancel();
 
-  const voice = pickVoice(langCode || 'en-US');
+  // iOS fix: delay kecil selepas cancel() — tanpa ini iOS akan senyap sahaja
+  await new Promise(r => setTimeout(r, 120));
+
+  // Tunggu senarai suara dimuatkan (penting untuk mobile)
+  const voices = await getVoicesAsync();
+  const voice = pickVoice(voices, langCode || 'en-US');
   const lang = voice ? voice.lang : (langCode || 'en-US');
 
   // Word-by-word HANYA jika admin enable secara eksplisit
@@ -585,12 +638,6 @@ function speakText(text, langCode, onAllDone) {
     utter.onerror = done;
     window.speechSynthesis.speak(utter);
   });
-}
-
-if ('speechSynthesis' in window) {
-  window.speechSynthesis.onvoiceschanged = () => {};
-  // Panggil getVoices() awal-awal supaya senarai dimuatkan
-  try { window.speechSynthesis.getVoices(); } catch(e){}
 }
 
 function playCurrentQuestion() {
